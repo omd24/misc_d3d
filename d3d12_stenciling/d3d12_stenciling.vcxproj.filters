@@ -16,6 +16,9 @@
     <Filter Include="DearImGui">
       <UniqueIdentifier>{b3a66df7-60bf-40dd-9a9a-876aab52760b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Models">
+      <UniqueIdentifier>{f601a463-6708-4ece-8863-315a995aa333}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="d3d_stenciling.cpp">
@@ -64,5 +67,13 @@
     <FxCompile Include="shaders\light_utils.hlsl">
       <Filter>Resource Files</Filter>
     </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="models\skull.txt">
+      <Filter>Models</Filter>
+    </Text>
+    <Text Include="models\car.txt">
+      <Filter>Models</Filter>
+    </Text>
   </ItemGroup>
 </Project>

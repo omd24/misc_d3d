@@ -31,32 +31,47 @@ enum RENDER_LAYER : int {
     OPAQUE_LAYER = 0,
     TRANSPARENT_LAYER = 1,
     ALPHATESTED_LAYER = 2,
+    MIRRORS_LAYER = 3,
+    REFLECTED_LAYER = 4,
+    SHADOW_LAYER = 5,
 
     _COUNT_RENDER_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_GRID = 0,
-    RITEM_BOX = 1,
+    RITEM_FLOOR = 0,
+    RITEM_WALL = 1,
+    RITEM_MIRROR = 2,
+    RITEM_SKULL = 3,
+    RITEM_REFLECTED_SKULL = 4,
+    RITEM_SHADOWED_SKULL = 5,
 
     _COUNT_RENDERITEM
 };
 enum GEOM_INDEX {
-    GEOM_BOX = 0,
-    GEOM_GRID = 1,
+    GEOM_ROOM = 0,
+    GEOM_SKULL = 1,
 
     _COUNT_GEOM
 };
+enum ROOM_SUBMESH_INDEX {
+    ROOM_SUBMESH_FLOOR = 0,
+    ROOM_SUBMESH_WALL = 0,
+    ROOM_SUBMESH_MIRROR = 0
+};
 enum MAT_INDEX {
-    MAT_WOOD_CRATE = 0,
-    MAT_GRASS = 1,
-    MAT_WIRED_CRATE = 2,
+    MAT_BRICKS = 0,
+    MAT_CHECKER_TILE = 1,
+    MAT_ICE_MIRROR = 2,
+    MAT_SKULL = 3,
+    MAT_SHADOW = 4,
 
     _COUNT_MATERIAL
 };
 enum TEX_INDEX {
-    TEX_CRATE01 = 0,
-    TEX_GRASS = 1,
-    TEX_WIREFENCE = 2,
+    TEX_BRICK = 0,
+    TEX_CHECKERBOARD = 1,
+    TEX_ICE = 2,
+    TEX_WHITE1x1 = 3,
 
     _COUNT_TEX
 };
@@ -135,6 +150,9 @@ struct D3DRenderContext {
     RenderItemArray                 opaque_ritems;
     RenderItemArray                 transparent_ritems;
     RenderItemArray                 alphatested_ritems;
+    RenderItemArray                 mirrors_ritems;
+    RenderItemArray                 reflected_ritems;
+    RenderItemArray                 shadow_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -221,174 +239,299 @@ load_texture (
 }
 static void
 create_materials (Material out_materials []) {
-    strcpy_s(out_materials[MAT_GRASS].name, "grass");
-    out_materials[MAT_GRASS].mat_cbuffer_index = 0;
-    out_materials[MAT_GRASS].diffuse_srvheap_index = 0;
-    out_materials[MAT_GRASS].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_GRASS].fresnel_r0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
-    out_materials[MAT_GRASS].roughness = 0.125f;
-    out_materials[MAT_GRASS].mat_transform = Identity4x4();
-    out_materials[MAT_GRASS].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_BRICKS].name, "bricks");
+    out_materials[MAT_BRICKS].mat_cbuffer_index = 0;
+    out_materials[MAT_BRICKS].diffuse_srvheap_index = 0;
+    out_materials[MAT_BRICKS].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_BRICKS].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+    out_materials[MAT_BRICKS].roughness = 0.25f;
+    out_materials[MAT_BRICKS].mat_transform = Identity4x4();
+    out_materials[MAT_BRICKS].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    strcpy_s(out_materials[MAT_WOOD_CRATE].name, "wood_crate");
-    out_materials[MAT_WOOD_CRATE].mat_cbuffer_index = 1;
-    out_materials[MAT_WOOD_CRATE].diffuse_srvheap_index = 1;
-    out_materials[MAT_WOOD_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WOOD_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WOOD_CRATE].roughness = 0.2f;
-    out_materials[MAT_WOOD_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WOOD_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_CHECKER_TILE].name, "checkertile");
+    out_materials[MAT_CHECKER_TILE].mat_cbuffer_index = 1;
+    out_materials[MAT_CHECKER_TILE].diffuse_srvheap_index = 1;
+    out_materials[MAT_CHECKER_TILE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_CHECKER_TILE].fresnel_r0 = XMFLOAT3(0.07f, 0.07f, 0.07f);
+    out_materials[MAT_CHECKER_TILE].roughness = 0.3f;
+    out_materials[MAT_CHECKER_TILE].mat_transform = Identity4x4();
+    out_materials[MAT_CHECKER_TILE].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    strcpy_s(out_materials[MAT_WIRED_CRATE].name, "wired_crate");
-    out_materials[MAT_WIRED_CRATE].mat_cbuffer_index = 2;
-    out_materials[MAT_WIRED_CRATE].diffuse_srvheap_index = 2;
-    out_materials[MAT_WIRED_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WIRED_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WIRED_CRATE].roughness = 0.2f;
-    out_materials[MAT_WIRED_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WIRED_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
-}
-static float
-calc_hill_height (float x, float z) {
-    return 0.3f * (z * sinf(0.1f * x) + x * cosf(0.1f * z));
-}
-static XMFLOAT3
-calc_hill_normal (float x, float z) {
-    // n = (-df/dx, 1, -df/dz)
-    XMFLOAT3 n(
-        -0.03f * z * cosf(0.1f * x) - 0.3f * cosf(0.1f * z),
-        1.0f,
-        -0.3f * sinf(0.1f * x) + 0.03f * x * sinf(0.1f * z)
-    );
+    strcpy_s(out_materials[MAT_ICE_MIRROR].name, "icemirror");
+    out_materials[MAT_ICE_MIRROR].mat_cbuffer_index = 2;
+    out_materials[MAT_ICE_MIRROR].diffuse_srvheap_index = 2;
+    out_materials[MAT_ICE_MIRROR].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_ICE_MIRROR].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+    out_materials[MAT_ICE_MIRROR].roughness = 0.5f;
+    out_materials[MAT_ICE_MIRROR].mat_transform = Identity4x4();
+    out_materials[MAT_ICE_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    XMVECTOR unit_normal = XMVector3Normalize(XMLoadFloat3(&n));
-    XMStoreFloat3(&n, unit_normal);
+    strcpy_s(out_materials[MAT_SKULL].name, "skullmat");
+    out_materials[MAT_SKULL].mat_cbuffer_index = 3;
+    out_materials[MAT_SKULL].diffuse_srvheap_index = 3;
+    out_materials[MAT_SKULL].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_SKULL].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+    out_materials[MAT_SKULL].roughness = 0.3f;
+    out_materials[MAT_SKULL].mat_transform = Identity4x4();
+    out_materials[MAT_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
 
-    return n;
+    strcpy_s(out_materials[MAT_SHADOW].name, "shadowmat");
+    out_materials[MAT_SHADOW].mat_cbuffer_index = 4;
+    out_materials[MAT_SHADOW].diffuse_srvheap_index = 3;
+    out_materials[MAT_SHADOW].diffuse_albedo = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.5f);
+    out_materials[MAT_SHADOW].fresnel_r0 = XMFLOAT3(0.001f, 0.001f, 0.001f);
+    out_materials[MAT_SHADOW].roughness = 0.0f;
+    out_materials[MAT_SHADOW].mat_transform = Identity4x4();
+    out_materials[MAT_SHADOW].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
 create_shape_geometry (D3DRenderContext * render_ctx) {
 
+    // room geometry [from https://www.amazon.com/Introduction-3D-Game-Programming-DirectX/dp/1942270062]
+
+    // Create and specify geometry.  For this sample we draw a floor
+    // and a wall with a mirror on it.  We put the floor, wall, and
+    // mirror geometry in one vertex buffer.
+    //
+    //   |--------------|
+    //   |              |
+    //   |----|----|----|
+    //   |Wall|Mirr|Wall|
+    //   |    | or |    |
+    //   /--------------/
+    //  /   Floor      /
+    // /--------------/
+
     // required sizes
-    int nvtx = 24;
-    int nidx = 36;
+    int nvtx = 20;
+    int nidx = 30;
 
     Vertex *    vertices = (Vertex *)::malloc(sizeof(Vertex) * nvtx);
     uint16_t *  indices = (uint16_t *)::malloc(sizeof(uint16_t) * nidx);
-    BYTE *      scratch = (BYTE *)::malloc(sizeof(GeomVertex) * nvtx + sizeof(uint16_t) * nidx);
+    int i = 0;
 
-    // box
-    UINT bsz = sizeof(GeomVertex) * nvtx;
-    GeomVertex *    box_vertices = reinterpret_cast<GeomVertex *>(scratch);
-    uint16_t *      box_indices = reinterpret_cast<uint16_t *>(scratch + bsz);
+    // Floor: Observe we tile texture coordinates.
+    vertices[i++] = {.position = {-3.5f, 0.0f, -10.0f}, .normal = {0.0f, 1.0f, 0.0f}, .texc = {0.0f, 4.0f}}; // 0 
+    vertices[i++] = {.position = {-3.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f }, .texc = { 0.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f  }, .texc = { 4.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 0.0f, -10.0f}, .normal = {0.0f, 1.0f, 0.0f}, .texc = { 4.0f, 4.0f}};
 
-    create_box(8.0f, 8.0f, 8.0f, box_vertices, box_indices);
+    // Wall: Observe we tile texture coordinates, and that we
+    // leave a gap in the middle for the mirror.
+    vertices[i++] = {.position = {-3.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 2.0f}}; // 4
+    vertices[i++] = {.position = {-3.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 0.0f}};
+    vertices[i++] = {.position = {-2.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.5f, 0.0f}};
+    vertices[i++] = {.position = {-2.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.5f, 2.0f}};
 
-    SubmeshGeometry box_submesh = {};
-    box_submesh.index_count = nidx;
-    box_submesh.start_index_location = 0;
-    box_submesh.base_vertex_location = 0;
+    vertices[i++] = {.position = {2.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 2.0f}}; // 8 
+    vertices[i++] = {.position = {2.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 2.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 2.0f, 2.0f}};
 
-    UINT k = 0;
-    for (size_t i = 0; i < nvtx; ++i, ++k) {
-        vertices[k].position = box_vertices[i].Position;
-        vertices[k].normal = box_vertices[i].Normal;
-        vertices[k].texc = box_vertices[i].TexC;
-    }
+    vertices[i++] = {.position = {-3.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 1.0f}}; // 12
+    vertices[i++] = {.position = {-3.5f, 6.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 6.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 6.0f, 0.0f}};
+    vertices[i++] = {.position = {7.5f, 4.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 6.0f, 1.0f}};
 
-    // -- pack indices
-    k = 0;
-    for (size_t i = 0; i < nidx; ++i, ++k) {
-        indices[k] = box_indices[i];
-    }
+    // Mirror
+    vertices[i++] = {.position = {-2.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 1.0f}}; // 16
+    vertices[i++] = {.position = {-2.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 0.0f}};
+    vertices[i++] = {.position = {2.5f, 4.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 1.0f, 0.0f}};
+    vertices[i++] = {.position = {2.5f, 0.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 1.0f, 1.0f}};
+
+    i = 0;
+    // Floor
+    indices[i++] = 0; indices[i++] = 1; indices[i++] = 2;
+    indices[i++] = 0; indices[i++] = 2; indices[i++] = 3;
+
+    // Walls
+    indices[i++] = 4; indices[i++] = 5; indices[i++] = 6;
+    indices[i++] = 4; indices[i++] = 6; indices[i++] = 7;
+
+    indices[i++] = 8; indices[i++] = 9; indices[i++] = 10;
+    indices[i++] = 8; indices[i++] = 10; indices[i++] = 11;
+
+    indices[i++] = 12; indices[i++] = 13; indices[i++] = 14;
+    indices[i++] = 12; indices[i++] = 14; indices[i++] = 15;
+
+    // Mirror
+    indices[i++] = 16; indices[i++] = 17; indices[i++] = 18;
+    indices[i++] = 16; indices[i++] = 18; indices[i++] = 19;
+
+    SubmeshGeometry floor_submesh = {};
+    floor_submesh.index_count = 6;
+    floor_submesh.start_index_location = 0;
+    floor_submesh.base_vertex_location = 0;
+
+    SubmeshGeometry wall_submesh = {};
+    wall_submesh.index_count = 18;
+    wall_submesh.start_index_location = 6;
+    wall_submesh.base_vertex_location = 0;
+
+    SubmeshGeometry mirror_submesh = {};
+    mirror_submesh.index_count = 6;
+    mirror_submesh.start_index_location = 24;
+    mirror_submesh.base_vertex_location = 0;
 
     UINT vb_byte_size = nvtx * sizeof(Vertex);
     UINT ib_byte_size = nidx * sizeof(uint16_t);
 
     // -- Fill out geom
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_cpu);
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_ROOM].vb_cpu);
     if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_BOX].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_ROOM].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_cpu);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_ROOM].ib_cpu);
     if (indices)
-        CopyMemory(render_ctx->geom[GEOM_BOX].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_ROOM].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_uploader, &render_ctx->geom[GEOM_BOX].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_uploader, &render_ctx->geom[GEOM_BOX].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_ROOM].vb_uploader, &render_ctx->geom[GEOM_ROOM].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_ROOM].ib_uploader, &render_ctx->geom[GEOM_ROOM].ib_gpu);
 
-    render_ctx->geom[GEOM_BOX].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_BOX].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_BOX].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_BOX].index_format = DXGI_FORMAT_R16_UINT;
+    render_ctx->geom[GEOM_ROOM].vb_byte_stide = sizeof(Vertex);
+    render_ctx->geom[GEOM_ROOM].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_ROOM].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_ROOM].index_format = DXGI_FORMAT_R16_UINT;
 
-    render_ctx->geom[GEOM_BOX].submesh_names[0] = "box";
-    render_ctx->geom[GEOM_BOX].submesh_geoms[0] = box_submesh;
+    render_ctx->geom[GEOM_ROOM].submesh_names[ROOM_SUBMESH_FLOOR] = "floor";
+    render_ctx->geom[GEOM_ROOM].submesh_geoms[ROOM_SUBMESH_FLOOR] = floor_submesh;
+
+    render_ctx->geom[GEOM_ROOM].submesh_names[ROOM_SUBMESH_WALL] = "wall";
+    render_ctx->geom[GEOM_ROOM].submesh_geoms[ROOM_SUBMESH_WALL] = wall_submesh;
+
+    render_ctx->geom[GEOM_ROOM].submesh_names[ROOM_SUBMESH_MIRROR] = "mirror";
+    render_ctx->geom[GEOM_ROOM].submesh_geoms[ROOM_SUBMESH_MIRROR] = mirror_submesh;
 
     // -- cleanup
-    free(scratch);
     free(indices);
     free(vertices);
 }
 static void
-create_land_geometry (D3DRenderContext * render_ctx) {
+create_skull_geometry (D3DRenderContext * render_ctx) {
 
-    // required sizes calculations
-    int nrow = 50;
-    int ncol = 50;
-    int nvtx = nrow * ncol;
-    int nidx = (nrow - 1) * (ncol - 1) * 6;     // every 6 vertices form a quad
+#pragma region Read_Data_File
+    FILE * f = nullptr;
+    errno_t err = fopen_s(&f, "./models/skull.txt", "r");
+    if (0 == f || err != 0) {
+        printf("could not open file\n");
+        return;
+    }
+    char linebuf[100];
+    int cnt = 0;
+    unsigned vcount = 0;
+    unsigned tcount = 0;
+    // -- read 1st line
+    if (fgets(linebuf, sizeof(linebuf), f))
+        cnt = sscanf_s(linebuf, "%*s %d", &vcount);
+    if (cnt != 1) {
+        printf("read error\n");
+        printf("read line: %s\n", linebuf);
+        return;
+    }
+    // -- read 2nd line
+    if (fgets(linebuf, sizeof(linebuf), f))
+        cnt = sscanf_s(linebuf, "%*s %d", &tcount);
+    if (cnt != 1) {
+        printf("read error\n");
+        printf("read line: %s\n", linebuf);
+        return;
+    }
+    // -- skip two lines
+    fgets(linebuf, sizeof(linebuf), f);
+    fgets(linebuf, sizeof(linebuf), f);
+    // -- read vertices
+    Vertex * vertices = (Vertex *)calloc(vcount, sizeof(Vertex));
+    for (unsigned i = 0; i < vcount; i++) {
+        fgets(linebuf, sizeof(linebuf), f);
+        cnt = sscanf_s(
+            linebuf, "%f %f %f %f %f %f",
+            &vertices[i].position.x, &vertices[i].position.y, &vertices[i].position.z,
+            &vertices[i].normal.x, &vertices[i].normal.y, &vertices[i].normal.z
+        );
+        if (cnt != 6) {
+            printf("read error\n");
+            printf("read line: %s\n", linebuf);
+            return;
+        }
 
-    Vertex * vertices = (Vertex *)::malloc(sizeof(Vertex) * nvtx);
-    uint16_t * indices = (uint16_t *)::malloc(sizeof(uint16_t) * nidx);
-    GeomVertex * grid = (GeomVertex *)::malloc(sizeof(GeomVertex) * nvtx);
+#pragma region skull texture coordinates calculations
+        XMVECTOR P = XMLoadFloat3(&vertices[i].position);
 
-    create_grid(320.0f, 320.0f, 50, 50, grid, indices);
+        // Project point onto unit sphere and generate spherical texture coordinates.
+        XMFLOAT3 shpere_pos;
+        XMStoreFloat3(&shpere_pos, XMVector3Normalize(P));
 
-    // Extract the vertex elements we are interested and apply the height function to
-    // each vertex.  In addition, color the vertices based on their height so we have
-    // sandy looking beaches, grassy low hills, and snow mountain peaks.
+        float theta = atan2f(shpere_pos.z, shpere_pos.x);
 
-    for (int i = 0; i < nvtx; ++i) {
-        auto & p = grid[i].Position;
-        vertices[i].position = p;
-        vertices[i].position.y = calc_hill_height(p.x, p.z);
-        vertices[i].normal = calc_hill_normal(p.x, p.z);
-        vertices[i].texc = grid[i].TexC;
+        // Put in [0, 2pi].
+        if (theta < 0.0f)
+            theta += XM_2PI;
+
+        float phi = acosf(shpere_pos.y);
+
+        float u = theta / (2.0f * XM_PI);
+        float v = phi / XM_PI;
+
+        vertices[i].texc = {u, v};
+#pragma endregion
+
+    }
+    // -- skip three lines
+    fgets(linebuf, sizeof(linebuf), f);
+    fgets(linebuf, sizeof(linebuf), f);
+    fgets(linebuf, sizeof(linebuf), f);
+    // -- read indices
+    uint32_t * indices = (uint32_t *)calloc(tcount * 3, sizeof(uint32_t));
+    for (unsigned i = 0; i < tcount; i++) {
+        fgets(linebuf, sizeof(linebuf), f);
+        cnt = sscanf_s(
+            linebuf, "%d %d %d",
+            &indices[i * 3 + 0], &indices[i * 3 + 1], &indices[i * 3 + 2]
+        );
+        if (cnt != 3) {
+            printf("read error\n");
+            printf("read line: %s\n", linebuf);
+            return;
+        }
     }
 
-    UINT vb_byte_size = nvtx * sizeof(Vertex);
-    UINT ib_byte_size = nidx * sizeof(uint16_t);
+    // -- remember to free heap-allocated memory
+    /*
+    free(vertices);
+    free(indices);
+    */
+    fclose(f);
+#pragma endregion   Read_Data_File
 
-    // -- Fill out render_ctx geom (output)
+    UINT vb_byte_size = vcount * sizeof(Vertex);
+    UINT ib_byte_size = (tcount * 3) * sizeof(uint32_t);
 
-    CHECK_AND_FAIL(D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_cpu));
-    if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_GRID].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+    // -- Fill out render_ctx geom[1] (skull)
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[1].vb_cpu);
+    CopyMemory(render_ctx->geom[1].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_cpu);
-    if (indices)
-        CopyMemory(render_ctx->geom[GEOM_GRID].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[1].ib_cpu);
+    CopyMemory(render_ctx->geom[1].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_uploader, &render_ctx->geom[GEOM_GRID].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_uploader, &render_ctx->geom[GEOM_GRID].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[1].vb_uploader, &render_ctx->geom[1].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[1].ib_uploader, &render_ctx->geom[1].ib_gpu);
 
-    render_ctx->geom[GEOM_GRID].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_GRID].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_GRID].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_GRID].index_format = DXGI_FORMAT_R16_UINT;
+    render_ctx->geom[GEOM_SKULL].vb_byte_stide = sizeof(Vertex);
+    render_ctx->geom[GEOM_SKULL].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_SKULL].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_SKULL].index_format = DXGI_FORMAT_R32_UINT;
 
-    SubmeshGeometry submesh;
-    submesh.index_count = nidx;
+    SubmeshGeometry submesh = {};
+    submesh.index_count = tcount * 3;
     submesh.start_index_location = 0;
     submesh.base_vertex_location = 0;
 
-    render_ctx->geom[GEOM_GRID].submesh_names[0] = "grid";
-    render_ctx->geom[GEOM_GRID].submesh_geoms[0] = submesh;
+    render_ctx->geom[GEOM_SKULL].submesh_names[0] = "skull";
+    render_ctx->geom[GEOM_SKULL].submesh_geoms[0] = submesh;
 
-    ::free(grid);
-    ::free(indices);
-    ::free(vertices);
+    // -- cleanup
+    free(vertices);
+    free(indices);
 }
 static void
 create_render_items (
@@ -396,44 +539,93 @@ create_render_items (
     RenderItemArray * opaque_ritems,
     RenderItemArray * transparent_ritems,
     RenderItemArray * alphatested_ritems,
-    MeshGeometry * box_geom, MeshGeometry * grid_geom,
+    RenderItemArray * mirrors_ritems,
+    RenderItemArray * reflected_ritems,
+    RenderItemArray * shadows_ritems,
+    MeshGeometry * room_geom, MeshGeometry * skull_geom,
     Material materials []
 ) {
-    all_ritems->ritems[RITEM_GRID].world = Identity4x4();
-    all_ritems->ritems[RITEM_GRID].tex_transform = Identity4x4();
-    XMStoreFloat4x4(&all_ritems->ritems[RITEM_GRID].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    all_ritems->ritems[RITEM_GRID].obj_cbuffer_index = 0;
-    all_ritems->ritems[RITEM_GRID].mat = &materials[MAT_GRASS];
-    all_ritems->ritems[RITEM_GRID].geometry = grid_geom;
-    all_ritems->ritems[RITEM_GRID].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    all_ritems->ritems[RITEM_GRID].index_count = grid_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_GRID].start_index_loc = grid_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_GRID].base_vertex_loc = grid_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_GRID].initialized = true;
+    all_ritems->ritems[RITEM_FLOOR].world = Identity4x4();
+    all_ritems->ritems[RITEM_FLOOR].tex_transform = Identity4x4();
+    all_ritems->ritems[RITEM_FLOOR].obj_cbuffer_index = 0;
+    all_ritems->ritems[RITEM_FLOOR].mat = &materials[MAT_CHECKER_TILE];
+    all_ritems->ritems[RITEM_FLOOR].geometry = room_geom;
+    all_ritems->ritems[RITEM_FLOOR].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    all_ritems->ritems[RITEM_FLOOR].index_count = room_geom->submesh_geoms[ROOM_SUBMESH_FLOOR].index_count;
+    all_ritems->ritems[RITEM_FLOOR].start_index_loc = room_geom->submesh_geoms[ROOM_SUBMESH_FLOOR].start_index_location;
+    all_ritems->ritems[RITEM_FLOOR].base_vertex_loc = room_geom->submesh_geoms[ROOM_SUBMESH_FLOOR].base_vertex_location;
+    all_ritems->ritems[RITEM_FLOOR].n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_FLOOR].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_FLOOR].initialized = true;
     all_ritems->size++;
-    opaque_ritems->ritems[0] = all_ritems->ritems[RITEM_GRID];
+    opaque_ritems->ritems[0] = all_ritems->ritems[RITEM_FLOOR];
     opaque_ritems->size++;
 
-    all_ritems->ritems[RITEM_BOX].world = Identity4x4();
-    XMStoreFloat4x4(&all_ritems->ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
-    all_ritems->ritems[RITEM_BOX].tex_transform = Identity4x4();
-    all_ritems->ritems[RITEM_BOX].obj_cbuffer_index = 1;
-    all_ritems->ritems[RITEM_BOX].geometry = box_geom;
-    all_ritems->ritems[RITEM_BOX].mat = &materials[MAT_WOOD_CRATE];
-    all_ritems->ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    all_ritems->ritems[RITEM_BOX].index_count = box_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_BOX].start_index_loc = box_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_BOX].base_vertex_loc = box_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_BOX].initialized = true;
+    all_ritems->ritems[RITEM_WALL].world = Identity4x4();
+    all_ritems->ritems[RITEM_WALL].tex_transform = Identity4x4();
+    all_ritems->ritems[RITEM_WALL].obj_cbuffer_index = 1;
+    all_ritems->ritems[RITEM_WALL].mat = &materials[MAT_BRICKS];
+    all_ritems->ritems[RITEM_WALL].geometry = room_geom;
+    all_ritems->ritems[RITEM_WALL].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    all_ritems->ritems[RITEM_WALL].index_count = room_geom->submesh_geoms[ROOM_SUBMESH_WALL].index_count;
+    all_ritems->ritems[RITEM_WALL].start_index_loc = room_geom->submesh_geoms[ROOM_SUBMESH_WALL].start_index_location;
+    all_ritems->ritems[RITEM_WALL].base_vertex_loc = room_geom->submesh_geoms[ROOM_SUBMESH_WALL].base_vertex_location;
+    all_ritems->ritems[RITEM_WALL].n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_WALL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_WALL].initialized = true;
     all_ritems->size++;
-    alphatested_ritems->ritems[0] = all_ritems->ritems[RITEM_BOX];
-    alphatested_ritems->size++;
+    opaque_ritems->ritems[1] = all_ritems->ritems[RITEM_WALL];
+    opaque_ritems->size++;
+
+    all_ritems->ritems[RITEM_SKULL].world = Identity4x4();
+    all_ritems->ritems[RITEM_SKULL].tex_transform = Identity4x4();
+    all_ritems->ritems[RITEM_SKULL].obj_cbuffer_index = 2;
+    all_ritems->ritems[RITEM_SKULL].mat = &materials[MAT_SKULL];
+    all_ritems->ritems[RITEM_SKULL].geometry = skull_geom;
+    all_ritems->ritems[RITEM_SKULL].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    all_ritems->ritems[RITEM_SKULL].index_count = skull_geom->submesh_geoms[0].index_count;
+    all_ritems->ritems[RITEM_SKULL].start_index_loc = skull_geom->submesh_geoms[0].start_index_location;
+    all_ritems->ritems[RITEM_SKULL].base_vertex_loc = skull_geom->submesh_geoms[0].base_vertex_location;
+    all_ritems->ritems[RITEM_SKULL].n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_SKULL].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_SKULL].initialized = true;
+    all_ritems->size++;
+    opaque_ritems->ritems[2] = all_ritems->ritems[RITEM_SKULL];
+    opaque_ritems->size++;
+
+    // reflected skull will have different world matrix, so it needs to be its own render item.
+    all_ritems->ritems[RITEM_REFLECTED_SKULL] = all_ritems->ritems[RITEM_SKULL];
+    all_ritems->ritems[RITEM_REFLECTED_SKULL].obj_cbuffer_index = 3;
+    all_ritems->size++;
+    reflected_ritems->ritems[0] = all_ritems->ritems[RITEM_REFLECTED_SKULL];
+    reflected_ritems->size++;
+
+    // shadowed skull will have different world matrix, so it needs to be its own render item.
+    all_ritems->ritems[RITEM_SHADOWED_SKULL] = all_ritems->ritems[RITEM_SKULL];
+    all_ritems->ritems[RITEM_SHADOWED_SKULL].obj_cbuffer_index = 4;
+    all_ritems->ritems[RITEM_SHADOWED_SKULL].mat = &materials[MAT_SHADOW];
+    all_ritems->size++;
+    shadows_ritems->ritems[0] = all_ritems->ritems[RITEM_SHADOWED_SKULL];
+    shadows_ritems->size++;
+
+    all_ritems->ritems[RITEM_MIRROR].world = Identity4x4();
+    all_ritems->ritems[RITEM_MIRROR].tex_transform = Identity4x4();
+    all_ritems->ritems[RITEM_MIRROR].obj_cbuffer_index = 5;
+    all_ritems->ritems[RITEM_MIRROR].mat = &materials[MAT_ICE_MIRROR];
+    all_ritems->ritems[RITEM_MIRROR].geometry = room_geom;
+    all_ritems->ritems[RITEM_MIRROR].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    all_ritems->ritems[RITEM_MIRROR].index_count = room_geom->submesh_geoms[ROOM_SUBMESH_MIRROR].index_count;
+    all_ritems->ritems[RITEM_MIRROR].start_index_loc = room_geom->submesh_geoms[ROOM_SUBMESH_MIRROR].start_index_location;
+    all_ritems->ritems[RITEM_MIRROR].base_vertex_loc = room_geom->submesh_geoms[ROOM_SUBMESH_MIRROR].base_vertex_location;
+    all_ritems->ritems[RITEM_MIRROR].n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_MIRROR].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_MIRROR].initialized = true;
+    all_ritems->size++;
+    mirrors_ritems->ritems[0] = all_ritems->ritems[RITEM_MIRROR];
+    mirrors_ritems->size++;
+    transparent_ritems->ritems[0] = all_ritems->ritems[RITEM_MIRROR];
+    transparent_ritems->size++;
 }
-// -- indexed drawing
 static void
 draw_render_items (
     ID3D12GraphicsCommandList * cmd_list,
@@ -482,41 +674,53 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
 
     // Fill out the heap with actual descriptors
     D3D12_CPU_DESCRIPTOR_HANDLE descriptor_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-
-    // grass texture
-    ID3D12Resource * grass_tex = render_ctx->textures[TEX_GRASS].resource;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+
+    // Brick texture
+    ID3D12Resource * brick_tex = render_ctx->textures[TEX_BRICK].resource;
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = grass_tex->GetDesc().Format;
+    srv_desc.Format = brick_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = grass_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = brick_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    render_ctx->device->CreateShaderResourceView(grass_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(brick_tex, &srv_desc, descriptor_cpu_handle);
 
-    // crate texture
-    ID3D12Resource * box_tex = render_ctx->textures[TEX_CRATE01].resource;
+    // checkerboard texture
+    ID3D12Resource * checkerboard_tex = render_ctx->textures[TEX_CHECKERBOARD].resource;
     memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = box_tex->GetDesc().Format;
+    srv_desc.Format = checkerboard_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = box_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = checkerboard_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(box_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(checkerboard_tex, &srv_desc, descriptor_cpu_handle);
 
-    // wire_fence texture
-    ID3D12Resource * wire_tex = render_ctx->textures[TEX_WIREFENCE].resource;
+    // Ice texture
+    ID3D12Resource * ice_tex = render_ctx->textures[TEX_ICE].resource;
     memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = wire_tex->GetDesc().Format;
+    srv_desc.Format = ice_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = wire_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = ice_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(wire_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(ice_tex, &srv_desc, descriptor_cpu_handle);
+
+    // White texture
+    ID3D12Resource * white_tex = render_ctx->textures[TEX_WHITE1x1].resource;
+    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Format = white_tex->GetDesc().Format;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Texture2D.MostDetailedMip = 0;
+    srv_desc.Texture2D.MipLevels = white_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
+    render_ctx->device->CreateShaderResourceView(white_tex, &srv_desc, descriptor_cpu_handle);
 
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
@@ -1409,9 +1613,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx                                      /* Additional application data */
     );
     SIMPLE_ASSERT(hwnd, "could not create window");
-
 #pragma endregion Windows_Setup
-
     // ========================================================================================================
 #pragma region Enable_Debug_Layer
     UINT dxgiFactoryFlags = 0;
@@ -1423,7 +1625,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #endif
 #pragma endregion Enable_Debug_Layer
-
     // ========================================================================================================
 #pragma region Initialization
     // Query Adapter (PhysicalDevice)
@@ -1511,32 +1712,35 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     if (render_ctx->cmd_queue)
         dxgi_factory->CreateSwapChain(render_ctx->cmd_queue, &swapchain_desc, &render_ctx->swapchain);
 
-    // -- to get current backbuffer index
-    //CHECK_AND_FAIL(render_ctx->swapchain->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&render_ctx->swapchain3));
-    //render_ctx->backbuffer_index = render_ctx->swapchain3->GetCurrentBackBufferIndex();
-
 // ========================================================================================================
 #pragma region Load Textures
-    // crate
-    strcpy_s(render_ctx->textures[TEX_CRATE01].name, "woodcrate01");
-    wcscpy_s(render_ctx->textures[TEX_CRATE01].filename, L"../Textures/WoodCrate02.dds");
+    // Brick
+    strcpy_s(render_ctx->textures[TEX_BRICK].name, "brickstex");
+    wcscpy_s(render_ctx->textures[TEX_BRICK].filename, L"../Textures/bricks3.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_CRATE01].filename, &render_ctx->textures[TEX_CRATE01]
+        render_ctx->textures[TEX_BRICK].filename, &render_ctx->textures[TEX_BRICK]
     );
-    // grass
-    strcpy_s(render_ctx->textures[TEX_GRASS].name, "grasstex");
-    wcscpy_s(render_ctx->textures[TEX_GRASS].filename, L"../Textures/grass.dds");
+    // Checkerboard
+    strcpy_s(render_ctx->textures[TEX_CHECKERBOARD].name, "checkerboardtex");
+    wcscpy_s(render_ctx->textures[TEX_CHECKERBOARD].filename, L"../Textures/checkboard.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_GRASS].filename, &render_ctx->textures[TEX_GRASS]
+        render_ctx->textures[TEX_CHECKERBOARD].filename, &render_ctx->textures[TEX_CHECKERBOARD]
     );
-    // wire_fence
-    strcpy_s(render_ctx->textures[TEX_WIREFENCE].name, "wirefencetex");
-    wcscpy_s(render_ctx->textures[TEX_WIREFENCE].filename, L"../Textures/WireFence.dds");
+    // Ice
+    strcpy_s(render_ctx->textures[TEX_ICE].name, "icetex");
+    wcscpy_s(render_ctx->textures[TEX_ICE].filename, L"../Textures/ice.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WIREFENCE].filename, &render_ctx->textures[TEX_WIREFENCE]
+        render_ctx->textures[TEX_ICE].filename, &render_ctx->textures[TEX_ICE]
+    );
+    // White1x1
+    strcpy_s(render_ctx->textures[TEX_WHITE1x1].name, "white1x1tex");
+    wcscpy_s(render_ctx->textures[TEX_WHITE1x1].filename, L"../Textures/white1x1.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_WHITE1x1].filename, &render_ctx->textures[TEX_WHITE1x1]
     );
 #pragma endregion
 
@@ -1706,7 +1910,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion PSO_Creation
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_land_geometry(render_ctx);
+    create_skull_geometry(render_ctx);
 
     create_shape_geometry(render_ctx);
     create_materials(render_ctx->materials);
@@ -1715,8 +1919,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         &render_ctx->opaque_ritems,
         &render_ctx->transparent_ritems,
         &render_ctx->alphatested_ritems,
-        &render_ctx->geom[GEOM_BOX],
-        &render_ctx->geom[GEOM_GRID],
+        &render_ctx->mirrors_ritems,
+        &render_ctx->reflected_ritems,
+        &render_ctx->shadow_ritems,
+        &render_ctx->geom[GEOM_ROOM],
+        &render_ctx->geom[GEOM_SKULL],
         render_ctx->materials
     );
 
@@ -1767,7 +1974,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * _COUNT_TEX);
 
     D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * _COUNT_MATERIAL);
+    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * _COUNT_TEX);
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
@@ -1850,10 +2057,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         );
 
         // End of the loop updates
-        if (0 == i_curr)
-            render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-        else if (1 == i_curr)
-            render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
         global_mouse_active = !(beginwnd || sliderf || coloredit);
     }
 #pragma endregion
