@@ -955,16 +955,14 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_data_ptr;
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
 }
-static HRESULT
+static UINT64
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
-
-    HRESULT ret = E_FAIL;
     UINT frame_index = *out_frame_index;
 
     // -- 1. schedule a signal command in the queue
-    UINT64 const current_fence_value = render_ctx->frame_resources[frame_index].fence;
-    ret = render_ctx->cmd_queue->Signal(render_ctx->fence, current_fence_value);
-    CHECK_AND_FAIL(ret);
+    // i.e., notify the fence when the GPU completes commands up to this fence point.
+    UINT64 current_fence_value = render_ctx->frame_resources[frame_index].fence;
+    render_ctx->cmd_queue->Signal(render_ctx->fence, current_fence_value);
 
     // -- 2. update frame index
     //*out_backbuffer_index = render_ctx->swapchain3->GetCurrentBackBufferIndex();
@@ -973,39 +971,39 @@ move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT 
 
     // -- 3. if the next frame is not ready to be rendered yet, wait until it is ready
     if (render_ctx->fence->GetCompletedValue() < render_ctx->frame_resources[frame_index].fence) {
-        ret = render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[frame_index].fence, render_ctx->fence_event);
-        CHECK_AND_FAIL(ret);
+        render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[frame_index].fence, render_ctx->fence_event);
         WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
     }
 
-    // -- 3. set the fence value for the next frame
-    render_ctx->frame_resources[frame_index].fence = current_fence_value + 1;
+    // -- 4. set the fence value for the next frame
+    // i.e., advance the fence value to mark commands up to this fence point.
+    render_ctx->frame_resources[frame_index].fence = ++current_fence_value;
 
-    return ret;
+    return current_fence_value;
 }
-static HRESULT
-wait_for_gpu (D3DRenderContext * render_ctx) {
-    HRESULT ret = E_FAIL;
+static void
+flush_command_queue (D3DRenderContext * render_ctx) {
+    // Advance the fence value to mark commands up to this fence point.
+    render_ctx->main_current_fence++;
 
-    /*UINT frame_index = render_ctx->frame_index;*/
+    // Add an instruction to the command queue to set a new fence point.  Because we 
+    // are on the GPU timeline, the new fence point won't be set until the GPU finishes
+    // processing all the commands prior to this Signal().
+    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
 
-    // Do it for all queuing frames to do a thorough cleanup
+    // Wait until the GPU has completed commands up to this fence point.
+    if (render_ctx->fence->GetCompletedValue() < render_ctx->main_current_fence) {
+        HANDLE event_handle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-    for (unsigned i = 0; i < NUM_QUEUING_FRAMES; i++) {
+        // Fire event when GPU hits current fence.  
+        render_ctx->fence->SetEventOnCompletion(render_ctx->main_current_fence, event_handle);
 
-        // -- 1. schedule a signal command in the queue
-        ret = render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->frame_resources[i].fence);
-        CHECK_AND_FAIL(ret);
-
-        // -- 2. wait until the fence has been processed
-        ret = render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[i].fence, render_ctx->fence_event);
-        CHECK_AND_FAIL(ret);
-        WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
-
-        // -- 3. increment fence value for the current frame
-        ++render_ctx->frame_resources[i].fence;
+        // Wait until the GPU hits current fence event is fired.
+        if (event_handle != 0) {
+            WaitForSingleObject(event_handle, INFINITE);
+            CloseHandle(event_handle);
+        }
     }
-    return ret;
 }
 static D3D12_RESOURCE_BARRIER
 create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
@@ -1018,9 +1016,8 @@ create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_R
     barrier.Transition.StateAfter = after;
     return barrier;
 }
-static HRESULT
+static void
 draw_main (D3DRenderContext * render_ctx) {
-    HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
 
@@ -1036,8 +1033,7 @@ draw_main (D3DRenderContext * render_ctx) {
     // However, when ExecuteCommandList() is called on a particular command 
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
-    ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[OPAQUE_LAYER]);
-    CHECK_AND_FAIL(ret);
+    render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[OPAQUE_LAYER]);
 
     // -- set viewport and scissor
     render_ctx->direct_cmd_list->RSSetViewports(1, &render_ctx->viewport);
@@ -1108,10 +1104,7 @@ draw_main (D3DRenderContext * render_ctx) {
     ID3D12CommandList * cmd_lists [] = {render_ctx->direct_cmd_list};
     render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
 
-
     render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
-
-    return ret;
 }
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
@@ -1174,30 +1167,6 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     render_ctx->main_pass_constants.lights[2].position = {0.0f, 0.0f, 0.0f};
     render_ctx->main_pass_constants.lights[2].spot_power = 64.0f;
 
-}
-static void
-flush_command_queue (D3DRenderContext * render_ctx) {
-    // Advance the fence value to mark commands up to this fence point.
-    render_ctx->main_current_fence++;
-
-    // Add an instruction to the command queue to set a new fence point.  Because we 
-    // are on the GPU timeline, the new fence point won't be set until the GPU finishes
-    // processing all the commands prior to this Signal().
-    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
-
-    // Wait until the GPU has completed commands up to this fence point.
-    if (render_ctx->fence->GetCompletedValue() < render_ctx->main_current_fence) {
-        HANDLE event_handle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-
-        // Fire event when GPU hits current fence.  
-        render_ctx->fence->SetEventOnCompletion(render_ctx->main_current_fence, event_handle);
-
-        // Wait until the GPU hits current fence event is fired.
-        if (event_handle != 0) {
-            WaitForSingleObject(event_handle, INFINITE);
-            CloseHandle(event_handle);
-        }
-    }
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx) {
@@ -1781,7 +1750,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // Wait for the command list to execute; we are reusing the same command 
     // list in our main loop but for now, we just want to wait for setup to 
     // complete before continuing.
-    CHECK_AND_FAIL(wait_for_gpu(render_ctx));
+    flush_command_queue(render_ctx);
+    //wait_for_gpu(render_ctx);
 
 #pragma endregion
 
@@ -1873,8 +1843,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         update_mat_cbuffers(render_ctx);
         update_pass_cbuffers(render_ctx, &global_timer);
 
-        CHECK_AND_FAIL(draw_main(render_ctx));
-        CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
+        draw_main(render_ctx);
+        render_ctx->main_current_fence = move_to_next_frame(
+            render_ctx,
+            &render_ctx->frame_index, &render_ctx->backbuffer_index
+        );
 
         // End of the loop updates
         if (0 == i_curr)
@@ -1887,7 +1860,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // ========================================================================================================
 #pragma region Cleanup_And_Debug
-    CHECK_AND_FAIL(wait_for_gpu(render_ctx));
+    flush_command_queue(render_ctx);
+    //wait_for_gpu(render_ctx);
 
     // Cleanup Imgui
     ImGui_ImplDX12_Shutdown();
