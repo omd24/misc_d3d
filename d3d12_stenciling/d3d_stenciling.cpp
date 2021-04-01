@@ -27,13 +27,13 @@
 #define NUM_BACKBUFFERS         2
 #define NUM_QUEUING_FRAMES      3
 
-enum RENDER_LAYER : int {
-    OPAQUE_LAYER = 0,
-    TRANSPARENT_LAYER = 1,
-    ALPHATESTED_LAYER = 2,
-    MIRRORS_LAYER = 3,
-    REFLECTED_LAYER = 4,
-    SHADOW_LAYER = 5,
+enum RENDER_LAYERS : int {
+    LAYER_OPAQUE = 0,
+    LAYER_TRANSPARENT = 1,
+    LAYER_ALPHATESTED = 2,
+    LAYER_MIRRORS = 3,
+    LAYER_REFLECTIONS = 4,
+    LAYER_SHADOW = 5,
 
     _COUNT_RENDER_LAYER
 };
@@ -55,8 +55,8 @@ enum GEOM_INDEX {
 };
 enum ROOM_SUBMESH_INDEX {
     ROOM_SUBMESH_FLOOR = 0,
-    ROOM_SUBMESH_WALL = 0,
-    ROOM_SUBMESH_MIRROR = 0
+    ROOM_SUBMESH_WALL = 1,
+    ROOM_SUBMESH_MIRROR = 2
 };
 enum MAT_INDEX {
     MAT_BRICKS = 0,
@@ -107,6 +107,9 @@ struct SceneContext {
     UINT width;
     UINT height;
     float aspect_ratio;
+
+    // skull move handle
+    XMFLOAT3 skull_translation;
 };
 
 GameTimer global_timer;
@@ -120,6 +123,12 @@ struct RenderItemArray {
     uint32_t    size;
 };
 struct D3DRenderContext {
+    // Used formats
+    struct {
+        DXGI_FORMAT backbuffer_format;
+        DXGI_FORMAT depthstencil_format;
+    };
+
     // Pipeline stuff
     D3D12_VIEWPORT                  viewport;
     D3D12_RECT                      scissor_rect;
@@ -287,7 +296,7 @@ create_materials (Material out_materials []) {
 static void
 create_shape_geometry (D3DRenderContext * render_ctx) {
 
-    // room geometry [from https://www.amazon.com/Introduction-3D-Game-Programming-DirectX/dp/1942270062]
+    // room geometry [from http://www.d3dcoder.net/d3d12.htm]
 
     // Create and specify geometry.  For this sample we draw a floor
     // and a wall with a mirror on it.  We put the floor, wall, and
@@ -337,7 +346,7 @@ create_shape_geometry (D3DRenderContext * render_ctx) {
     vertices[i++] = {.position = {-2.5f, 0.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 1.0f}}; // 16
     vertices[i++] = {.position = {-2.5f, 4.0f, 0.0f}, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 0.0f, 0.0f}};
     vertices[i++] = {.position = {2.5f, 4.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 1.0f, 0.0f}};
-    vertices[i++] = {.position = {2.5f, 0.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 1.0f, 1.0f}};
+    vertices[i]   = {.position = {2.5f, 0.0f, 0.0f }, .normal = { 0.0f, 0.0f, -1.0f}, .texc = { 1.0f, 1.0f}};
 
     i = 0;
     // Floor
@@ -967,16 +976,16 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     opaque_pso_desc.SampleMask = UINT_MAX;
     opaque_pso_desc.RasterizerState = def_rasterizer_desc;
     opaque_pso_desc.DepthStencilState = ds_desc;
-    opaque_pso_desc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
     opaque_pso_desc.InputLayout.pInputElementDescs = input_desc;
     opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(input_desc);
     opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     opaque_pso_desc.NumRenderTargets = 1;
-    opaque_pso_desc.RTVFormats[0] = DXGI_FORMAT::DXGI_FORMAT_R8G8B8A8_UNORM;
+    opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
     opaque_pso_desc.SampleDesc.Count = 1;
     opaque_pso_desc.SampleDesc.Quality = 0;
 
-    render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[OPAQUE_LAYER]));
+    render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
     //
     // -- Create PSO for Transparent objs
     //
@@ -995,7 +1004,7 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     transparency_blend_desc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
     transparent_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
-    render_ctx->device->CreateGraphicsPipelineState(&transparent_pso_desc, IID_PPV_ARGS(&render_ctx->psos[TRANSPARENT_LAYER]));
+    render_ctx->device->CreateGraphicsPipelineState(&transparent_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_TRANSPARENT]));
     //
     // -- Create PSO for AlphaTested objs
     //
@@ -1003,25 +1012,127 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     alpha_pso_desc.PS.pShaderBytecode = pixel_shader_code_alphatested->GetBufferPointer();
     alpha_pso_desc.PS.BytecodeLength = pixel_shader_code_alphatested->GetBufferSize();
     alpha_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[ALPHATESTED_LAYER]));
+    render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED]));
+    //
+    // -- Create PSO for marking stencil mirrors
+    //
+    D3D12_BLEND_DESC mirror_blend_desc = def_blend_desc;
+    mirror_blend_desc.RenderTarget[0].RenderTargetWriteMask = 0;    // disable write to backbuffer
+
+    D3D12_DEPTH_STENCIL_DESC mirror_dss = {};
+    mirror_dss.DepthEnable = true;
+    mirror_dss.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    mirror_dss.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    mirror_dss.StencilEnable = true;
+    mirror_dss.StencilReadMask = 0xff;
+    mirror_dss.StencilWriteMask = 0xff;
+
+    mirror_dss.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    mirror_dss.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    mirror_dss.FrontFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
+    mirror_dss.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    // Not rendering backfacing polygons so these don't matter
+    mirror_dss.BackFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    mirror_dss.BackFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    mirror_dss.BackFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
+    mirror_dss.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC mirror_pso_desc = opaque_pso_desc;
+    mirror_pso_desc.BlendState = mirror_blend_desc;
+    mirror_pso_desc.DepthStencilState = mirror_dss;
+    render_ctx->device->CreateGraphicsPipelineState(&mirror_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_MIRRORS]));
+    //
+    // -- Create PSO for stencil reflections
+    //
+    D3D12_DEPTH_STENCIL_DESC reflect_dss = {};
+    reflect_dss.DepthEnable = true;
+    reflect_dss.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    reflect_dss.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    reflect_dss.StencilEnable = true;
+    reflect_dss.StencilReadMask = 0xff;
+    reflect_dss.StencilWriteMask = 0xff;
+
+    reflect_dss.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_EQUAL;
+
+    // Not rendering backfacing polygons so these don't matter
+    reflect_dss.BackFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.BackFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.BackFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+    reflect_dss.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_EQUAL;
+
+    // correct winding order for reflected objects before creating pso
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC reflect_pso_desc = opaque_pso_desc;
+    reflect_pso_desc.DepthStencilState = reflect_dss;
+    reflect_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    reflect_pso_desc.RasterizerState.FrontCounterClockwise = true;
+    render_ctx->device->CreateGraphicsPipelineState(&reflect_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_REFLECTIONS]));
+    //
+    // -- Create PSO for shadow objects
+    //
+    D3D12_DEPTH_STENCIL_DESC shadow_dss = {};
+    shadow_dss.DepthEnable = true;
+    shadow_dss.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    shadow_dss.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    shadow_dss.StencilEnable = true;
+    shadow_dss.StencilReadMask = 0xff;
+    shadow_dss.StencilWriteMask = 0xff;
+
+    shadow_dss.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    shadow_dss.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    shadow_dss.FrontFace.StencilPassOp = D3D12_STENCIL_OP_INCR; // to prevent double blending
+    shadow_dss.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_EQUAL;
+
+    // Not rendering backfacing polygons so these don't matter
+    shadow_dss.BackFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    shadow_dss.BackFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    shadow_dss.BackFace.StencilPassOp = D3D12_STENCIL_OP_INCR;
+    shadow_dss.BackFace.StencilFunc = D3D12_COMPARISON_FUNC_EQUAL;
+
+    // we draw shadows with transparency, so base it off the transparency description.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow_pso_desc = transparent_pso_desc;
+    shadow_pso_desc.DepthStencilState = shadow_dss;
+    render_ctx->device->CreateGraphicsPipelineState(&shadow_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW]));
 }
 static void
-handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
+handle_keyboard_input (
+    RenderItem * skull, RenderItem * reflected_skull,
+    RenderItem * shadowed_skull, XMFLOAT3 * light_dir,
+    SceneContext * scene_ctx, GameTimer * gt
+) {
+    /*
+        skull position / translation are handled here!
+    */
     float dt = gt->delta_time;
 
-    if (GetAsyncKeyState(VK_LEFT) & 0x8000)
-        scene_ctx->sun_theta -= 1.0f * dt;
+    // Don't let user move below ground plane.
+    scene_ctx->skull_translation.y = (scene_ctx->skull_translation.y > 0.0f) ? scene_ctx->skull_translation.y : 0.0f;
 
-    if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
-        scene_ctx->sun_theta += 1.0f * dt;
+    // Update the new world matrix.
+    XMMATRIX skull_rotate = XMMatrixRotationY(0.5f * XM_PI);
+    XMMATRIX skull_scale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
+    XMMATRIX skull_offset = XMMatrixTranslation(scene_ctx->skull_translation.x, scene_ctx->skull_translation.y, scene_ctx->skull_translation.z);
+    XMMATRIX skull_world = skull_rotate * skull_scale * skull_offset;
+    XMStoreFloat4x4(&skull->world, skull_world);
 
-    if (GetAsyncKeyState(VK_UP) & 0x8000)
-        scene_ctx->sun_phi -= 1.0f * dt;
+    // Update reflection world matrix.
+    XMVECTOR mirror_plane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
+    XMMATRIX R = XMMatrixReflect(mirror_plane);
+    XMStoreFloat4x4(&reflected_skull->world, skull_world * R);
 
-    if (GetAsyncKeyState(VK_DOWN) & 0x8000)
-        scene_ctx->sun_phi += 1.0f * dt;
+    // Update shadow world matrix.
+    XMVECTOR shadow_plane = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f); // xz plane
+    XMVECTOR to_main_light = -XMLoadFloat3(light_dir);
+    XMMATRIX S = XMMatrixShadow(shadow_plane, to_main_light);
+    XMMATRIX shadow_y_offset = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
+    XMStoreFloat4x4(&shadowed_skull->world, skull_world * S * shadow_y_offset);
 
-    scene_ctx->sun_phi = CLAMP_VALUE(scene_ctx->sun_phi, 0.1f, XM_PIDIV2);
+    skull->n_frames_dirty = NUM_QUEUING_FRAMES;
+    reflected_skull->n_frames_dirty = NUM_QUEUING_FRAMES;
+    shadowed_skull->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
@@ -1120,7 +1231,7 @@ update_mat_cbuffers (D3DRenderContext * render_ctx) {
     }
 }
 static void
-update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
+update_main_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 
     XMMATRIX view = XMLoadFloat4x4(&global_scene_ctx.view);
     XMMATRIX proj = XMLoadFloat4x4(&global_scene_ctx.proj);
@@ -1237,7 +1348,7 @@ draw_main (D3DRenderContext * render_ctx) {
     // However, when ExecuteCommandList() is called on a particular command 
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
-    render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[OPAQUE_LAYER]);
+    render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
 
     // -- set viewport and scissor
     render_ctx->direct_cmd_list->RSSetViewports(1, &render_ctx->viewport);
@@ -1275,7 +1386,7 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->opaque_ritems, frame_index
     );
     // 2. draw alpha-tested obj(s)
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[ALPHATESTED_LAYER]);
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
     draw_render_items(
         render_ctx->direct_cmd_list,
         render_ctx->frame_resources[frame_index].obj_cb,
@@ -1285,7 +1396,7 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->alphatested_ritems, frame_index
     );
     // 3. draw transparent objs
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[TRANSPARENT_LAYER]);
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_TRANSPARENT]);
     draw_render_items(
         render_ctx->direct_cmd_list,
         render_ctx->frame_resources[frame_index].obj_cb,
@@ -1317,9 +1428,9 @@ SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
 
     scene_ctx->width = w;
     scene_ctx->height = h;
-    scene_ctx->theta = 1.5f * XM_PI;
-    scene_ctx->phi = XM_PIDIV2 - 0.1f;
-    scene_ctx->radius = 50.0f;
+    scene_ctx->theta = 1.24f * XM_PI;
+    scene_ctx->phi = 0.42f * XM_PI;
+    scene_ctx->radius = 12.0f;
     scene_ctx->sun_theta = 1.25f * XM_PI;
     scene_ctx->sun_phi = XM_PIDIV4;
     scene_ctx->aspect_ratio = (float)scene_ctx->width / (float)scene_ctx->height;
@@ -1327,6 +1438,8 @@ SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
     scene_ctx->view = Identity4x4();
     XMMATRIX p = DirectX::XMMatrixPerspectiveFovLH(0.25f * XM_PI, scene_ctx->aspect_ratio, 1.0f, 1000.0f);
     XMStoreFloat4x4(&scene_ctx->proj, p);
+
+    scene_ctx->skull_translation = {0.0f, 1.0f, -5.0f};
 }
 static void
 RenderContext_Init (D3DRenderContext * render_ctx) {
@@ -1371,6 +1484,9 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     render_ctx->main_pass_constants.lights[2].position = {0.0f, 0.0f, 0.0f};
     render_ctx->main_pass_constants.lights[2].spot_power = 64.0f;
 
+    // -- specify formats
+    render_ctx->backbuffer_format   = DXGI_FORMAT_R8G8B8A8_UNORM;
+    render_ctx->depthstencil_format = DXGI_FORMAT_D24_UNORM_S8_UINT;
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx) {
@@ -1398,7 +1514,7 @@ d3d_resize (D3DRenderContext * render_ctx) {
         render_ctx->swapchain->ResizeBuffers(
             NUM_BACKBUFFERS,
             w, h,
-            DXGI_FORMAT_R8G8B8A8_UNORM,
+            render_ctx->backbuffer_format,
             DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH
         );
 
@@ -1675,7 +1791,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->device->CreateCommandList(
             0, D3D12_COMMAND_LIST_TYPE_DIRECT,
             render_ctx->direct_cmd_list_alloc,
-            render_ctx->psos[OPAQUE_LAYER], IID_PPV_ARGS(&render_ctx->direct_cmd_list)
+            render_ctx->psos[LAYER_OPAQUE], IID_PPV_ARGS(&render_ctx->direct_cmd_list)
         );
 
         // Reset the command list to prep for initialization commands.
@@ -1688,7 +1804,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     DXGI_MODE_DESC backbuffer_desc = {};
     backbuffer_desc.Width = global_scene_ctx.width;
     backbuffer_desc.Height = global_scene_ctx.height;
-    backbuffer_desc.Format = DXGI_FORMAT::DXGI_FORMAT_R8G8B8A8_UNORM;
+    backbuffer_desc.Format = render_ctx->backbuffer_format;
     backbuffer_desc.RefreshRate.Numerator = 60;
     backbuffer_desc.RefreshRate.Denominator = 1;
     backbuffer_desc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
@@ -1911,8 +2027,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 #pragma region Shapes_And_Renderitem_Creation
     create_skull_geometry(render_ctx);
-
     create_shape_geometry(render_ctx);
+
     create_materials(render_ctx->materials);
     create_render_items(
         &render_ctx->all_ritems,
@@ -1980,7 +2096,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX12_Init(
         render_ctx->device, NUM_QUEUING_FRAMES,
-        DXGI_FORMAT_R8G8B8A8_UNORM, render_ctx->srv_heap,
+        render_ctx->backbuffer_format, render_ctx->srv_heap,
         imgui_cpu_handle,
         imgui_gpu_handle
     );
@@ -2043,12 +2159,18 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
         Timer_Tick(&global_timer);
-        handle_keyboard_input(&global_scene_ctx, &global_timer);
+        handle_keyboard_input(
+            &render_ctx->all_ritems.ritems[RITEM_SKULL],
+            &render_ctx->all_ritems.ritems[RITEM_REFLECTED_SKULL],
+            &render_ctx->all_ritems.ritems[RITEM_SHADOWED_SKULL],
+            &render_ctx->main_pass_constants.lights[0].direction,
+            &global_scene_ctx, &global_timer
+        );
         update_camera(&global_scene_ctx);
 
         update_obj_cbuffers(render_ctx);
         update_mat_cbuffers(render_ctx);
-        update_pass_cbuffers(render_ctx, &global_timer);
+        update_main_pass_cbuffers(render_ctx, &global_timer);
 
         draw_main(render_ctx);
         render_ctx->main_current_fence = move_to_next_frame(
