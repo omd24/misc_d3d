@@ -151,6 +151,7 @@ struct D3DRenderContext {
     ID3D12DescriptorHeap *          srv_heap;
 
     PassConstants                   main_pass_constants;
+    PassConstants                   reflected_pass_constants;
     UINT                            pass_cbv_offset;
 
     // List of all the render items.
@@ -269,7 +270,7 @@ create_materials (Material out_materials []) {
     strcpy_s(out_materials[MAT_ICE_MIRROR].name, "icemirror");
     out_materials[MAT_ICE_MIRROR].mat_cbuffer_index = 2;
     out_materials[MAT_ICE_MIRROR].diffuse_srvheap_index = 2;
-    out_materials[MAT_ICE_MIRROR].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_ICE_MIRROR].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 0.3f);
     out_materials[MAT_ICE_MIRROR].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
     out_materials[MAT_ICE_MIRROR].roughness = 0.5f;
     out_materials[MAT_ICE_MIRROR].mat_transform = Identity4x4();
@@ -955,16 +956,16 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     def_rasterizer_desc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
     /* Depth Stencil Description */
-    D3D12_DEPTH_STENCIL_DESC ds_desc = {};
-    ds_desc.DepthEnable = TRUE;
-    ds_desc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    ds_desc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-    ds_desc.StencilEnable = FALSE;
-    ds_desc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
-    ds_desc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    D3D12_DEPTH_STENCIL_DESC def_dss = {};
+    def_dss.DepthEnable = TRUE;
+    def_dss.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    def_dss.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    def_dss.StencilEnable = FALSE;
+    def_dss.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    def_dss.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
     D3D12_DEPTH_STENCILOP_DESC def_stencil_op = {D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS};
-    ds_desc.FrontFace = def_stencil_op;
-    ds_desc.BackFace = def_stencil_op;
+    def_dss.FrontFace = def_stencil_op;
+    def_dss.BackFace = def_stencil_op;
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
     opaque_pso_desc.pRootSignature = render_ctx->root_signature;
@@ -975,7 +976,7 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     opaque_pso_desc.BlendState = def_blend_desc;
     opaque_pso_desc.SampleMask = UINT_MAX;
     opaque_pso_desc.RasterizerState = def_rasterizer_desc;
-    opaque_pso_desc.DepthStencilState = ds_desc;
+    opaque_pso_desc.DepthStencilState = def_dss;
     opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
     opaque_pso_desc.InputLayout.pInputElementDescs = input_desc;
     opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(input_desc);
@@ -1107,6 +1108,11 @@ handle_keyboard_input (
         skull position / translation are handled here!
     */
     float dt = gt->delta_time;
+
+    // TODO(omid): Add code to handle keyboard input 
+    //
+
+
 
     // Don't let user move below ground plane.
     scene_ctx->skull_translation.y = (scene_ctx->skull_translation.y > 0.0f) ? scene_ctx->skull_translation.y : 0.0f;
@@ -1270,6 +1276,25 @@ update_main_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_data_ptr;
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
 }
+static void
+update_reflected_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
+
+    render_ctx->reflected_pass_constants = render_ctx->main_pass_constants;
+
+    XMVECTOR mirror_plane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+    XMMATRIX R = XMMatrixReflect(mirror_plane);
+
+    // Reflect the lighting.
+    for (int i = 0; i < 3; ++i) {
+        XMVECTOR light_dir = XMLoadFloat3(&render_ctx->main_pass_constants.lights[i].direction);
+        XMVECTOR reflected_light_dir = XMVector3TransformNormal(light_dir, R);
+        XMStoreFloat3(&render_ctx->reflected_pass_constants.lights[i].direction, reflected_light_dir);
+    }
+
+    // Reflected pass stored in index 1
+    uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_data_ptr + (1 * sizeof(PassConstants));
+    memcpy(pass_ptr, &render_ctx->reflected_pass_constants, sizeof(PassConstants));
+}
 static UINT64
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
     UINT frame_index = *out_frame_index;
@@ -1339,16 +1364,11 @@ draw_main (D3DRenderContext * render_ctx) {
     // Populate command list
 
     // -- reset cmd_allocator and cmd_list
-
-    // Command list allocators can only be reset when the associated 
-    // command lists have finished execution on the GPU; apps should use 
-    // fences to determine GPU execution progress.
     render_ctx->frame_resources[frame_index].cmd_list_alloc->Reset();
-
-    // However, when ExecuteCommandList() is called on a particular command 
-    // list, that command list can then be reset at any time and must be before 
-    // re-recording.
-    render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
+    render_ctx->direct_cmd_list->Reset(
+        render_ctx->frame_resources[frame_index].cmd_list_alloc,
+        render_ctx->psos[LAYER_OPAQUE]
+    );
 
     // -- set viewport and scissor
     render_ctx->direct_cmd_list->RSSetViewports(1, &render_ctx->viewport);
@@ -1372,7 +1392,7 @@ draw_main (D3DRenderContext * render_ctx) {
 
     render_ctx->direct_cmd_list->SetGraphicsRootSignature(render_ctx->root_signature);
 
-    // Bind per-pass constant buffer.  We only need to do this once per-pass.
+    // Bind [default] per-pass constant buffer. We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     render_ctx->direct_cmd_list->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
 
@@ -1385,17 +1405,34 @@ draw_main (D3DRenderContext * render_ctx) {
         render_ctx->srv_heap,
         &render_ctx->opaque_ritems, frame_index
     );
-    // 2. draw alpha-tested obj(s)
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
+    // 2. draw mirrors only to stencil buffer, i.e., mark visible mirror pixels in stencil buffer with value 1
+    render_ctx->direct_cmd_list->OMSetStencilRef(1);
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_MIRRORS]);
     draw_render_items(
         render_ctx->direct_cmd_list,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
         render_ctx->srv_heap,
-        &render_ctx->alphatested_ritems, frame_index
+        &render_ctx->mirrors_ritems, frame_index
     );
-    // 3. draw transparent objs
+    // 3. draw reflections, only into the mirror (only for pixels where stencil buffer is 1)
+    // Use a different pass_cb for light reflection!
+    render_ctx->direct_cmd_list->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress() + (1 * sizeof(PassConstants)));
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_REFLECTIONS]);
+    draw_render_items(
+        render_ctx->direct_cmd_list,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->reflected_ritems, frame_index
+    );
+
+    // 4. draw mirrors, this time into backbuffer (with transparency blending)
+    // Restore [default] pass_cb and stencil ref
+    render_ctx->direct_cmd_list->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
+    render_ctx->direct_cmd_list->OMSetStencilRef(0);
     render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_TRANSPARENT]);
     draw_render_items(
         render_ctx->direct_cmd_list,
@@ -1404,6 +1441,17 @@ draw_main (D3DRenderContext * render_ctx) {
         render_ctx->cbv_srv_uav_descriptor_size,
         render_ctx->srv_heap,
         &render_ctx->transparent_ritems, frame_index
+    );
+
+    // 5. draw shadows
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_SHADOW]);
+    draw_render_items(
+        render_ctx->direct_cmd_list,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->shadow_ritems, frame_index
     );
 
     // Imgui draw call
@@ -1699,7 +1747,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 1280, 720);
+    SceneContext_Init(&global_scene_ctx, 720, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -1722,7 +1770,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     HWND hwnd = CreateWindowEx(
         0,                                              // Optional window styles.
         wc.lpszClassName,                               // Window class
-        _T("Waves Blending app"),                       // Window title
+        _T("Stencil app"),                              // Window title
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,               // Window style
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,    // Size and position settings
         0 /* Parent window */, 0 /* Menu */, hInstance  /* Instance handle */,
@@ -1931,11 +1979,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #pragma endregion Rtv_Creation
 
-#pragma region Create CBuffers and Dynamic Vertex Buffer (waves_vb)
+#pragma region Create CBuffers
     UINT obj_cb_size = sizeof(ObjectConstants);
     UINT mat_cb_size = sizeof(MaterialConstants);
     UINT pass_cb_size = sizeof(PassConstants);
-    UINT vertex_size = sizeof(Vertex);
+    UINT pass_count = 2;    // one default pass_cb (as usual) and one additional pass_cb for light reflection
     for (UINT i = 0; i < NUM_QUEUING_FRAMES; ++i) {
         // -- create a cmd-allocator for each frame
         res = render_ctx->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&render_ctx->frame_resources[i].cmd_list_alloc));
@@ -1949,7 +1997,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // Initialize cb data
         ::memcpy(render_ctx->frame_resources[i].mat_cb_data_ptr, &render_ctx->frame_resources[i].mat_cb_data, sizeof(render_ctx->frame_resources[i].mat_cb_data));
 
-        create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb);
+        create_upload_buffer(render_ctx->device, pass_cb_size * pass_count, &render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb);
         // Initialize cb data
         ::memcpy(render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb_data, sizeof(render_ctx->frame_resources[i].pass_cb_data));
     }
@@ -2106,7 +2154,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoScrollbar;
     window_flags |= ImGuiWindowFlags_MenuBar;
-    window_flags |= ImGuiWindowFlags_NoMove;
+    //window_flags |= ImGuiWindowFlags_NoMove;
     window_flags |= ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_NoNav;
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -2119,7 +2167,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     global_running = true;
     global_resizing = false;
     global_mouse_active = true;
-    bool beginwnd, sliderf, coloredit;
+    bool beginwnd, coloredit;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
     while (global_running) {
@@ -2136,19 +2184,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         ImGui::Begin("Settings", ptr_open, window_flags);
         beginwnd = ImGui::IsItemActive();
 
-        ImGui::SliderFloat(
-            "Fog Distance",
-            &render_ctx->main_pass_constants.fog_start,
-            5.0f,
-            150.0f
-        );
-        sliderf = ImGui::IsItemActive();
-
-        ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
+        ImGui::ColorEdit3("BG Color", (float*)&render_ctx->main_pass_constants.fog_color);
         coloredit = ImGui::IsItemActive();
-
-        static int i_curr = 0;
-        ImGui::Combo("Box Material", &i_curr, "   Wood\0   Wire-fenced\0\0");
 
         ImGui::Text("\n\n");
         ImGui::Separator();
@@ -2171,6 +2208,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         update_obj_cbuffers(render_ctx);
         update_mat_cbuffers(render_ctx);
         update_main_pass_cbuffers(render_ctx, &global_timer);
+        update_reflected_pass_cbuffers(render_ctx, &global_timer);
 
         draw_main(render_ctx);
         render_ctx->main_current_fence = move_to_next_frame(
@@ -2179,7 +2217,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         );
 
         // End of the loop updates
-        global_mouse_active = !(beginwnd || sliderf || coloredit);
+        global_mouse_active = !(beginwnd || coloredit);
     }
 #pragma endregion
 
