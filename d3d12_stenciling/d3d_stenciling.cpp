@@ -1,3 +1,6 @@
+// TODO(omid): Add skull shadow to wall 
+// TODO(omid): Clamp skull/user inputs 
+
 #include "headers/common.h"
 
 #include <dxgi1_6.h>
@@ -1147,7 +1150,21 @@ handle_keyboard_input (
     float dt = gt->delta_time;
 
     // Handle user inputs
-
+    // Note on GetAsyncKeyState return value: 
+    // If the most significant bit is set, the key is down, and
+    // if the least significant bit is set, the key was pressed after the previous call
+    if (GetAsyncKeyState('A') & 0x8000)
+        scene_ctx->skull_translation.x -= 1.0f * dt;
+    if (GetAsyncKeyState('D') & 0x8000)
+        scene_ctx->skull_translation.x += 1.0f * dt;
+    if (GetAsyncKeyState('W') & 0x8000)
+        scene_ctx->skull_translation.y += 1.0f * dt;
+    if (GetAsyncKeyState('S') & 0x8000)
+        scene_ctx->skull_translation.y -= 1.0f * dt;
+    if (GetAsyncKeyState('E') & 0x8000)
+        scene_ctx->skull_translation.z += 1.0f * dt;
+    if (GetAsyncKeyState('Q') & 0x8000)
+        scene_ctx->skull_translation.z -= 1.0f * dt;
 
     // Don't let user move below ground plane.
     scene_ctx->skull_translation.y = (scene_ctx->skull_translation.y > 0.0f) ? scene_ctx->skull_translation.y : 0.0f;
@@ -1798,7 +1815,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 720, 720);
+    SceneContext_Init(&global_scene_ctx, 1280, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -2235,6 +2252,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         ImGui::NewFrame();
         ImGui::Begin("Settings", ptr_open, window_flags);
         beginwnd = ImGui::IsItemActive();
+
+        ImGui::TextColored(
+            ImVec4(0.8f, 0.7f, 0.0f, 1.0f),
+            "Use 'A', 'W', 'S', 'D', 'Q', 'E' to move skull\n\n"
+        );
 
         ImGui::ColorEdit3("BG Color", (float*)&render_ctx->main_pass_constants.fog_color);
         coloredit = ImGui::IsItemActive();
