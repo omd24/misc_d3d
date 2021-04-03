@@ -34,6 +34,7 @@ enum RENDER_LAYERS : int {
     LAYER_MIRRORS = 3,
     LAYER_REFLECTIONS = 4,
     LAYER_SHADOW = 5,
+    //LAYER_REFLECTED_SHADOW = 6,
 
     _COUNT_RENDER_LAYER
 };
@@ -43,7 +44,9 @@ enum ALL_RENDERITEMS {
     RITEM_MIRROR = 2,
     RITEM_SKULL = 3,
     RITEM_REFLECTED_SKULL = 4,
-    RITEM_SHADOWED_SKULL = 5,
+    RITEM_REFLECTED_FLOOR = 5,
+    RITEM_REFLECTED_SHADOW = 6,
+    RITEM_SHADOWED_SKULL = 7,
 
     _COUNT_RENDERITEM
 };
@@ -108,8 +111,9 @@ struct SceneContext {
     UINT height;
     float aspect_ratio;
 
-    // skull move handle
+    // skull translation
     XMFLOAT3 skull_translation;
+    //XMFLOAT3 floor_translation;   // do we need to translate floor?
 };
 
 GameTimer global_timer;
@@ -163,6 +167,7 @@ struct D3DRenderContext {
     RenderItemArray                 mirrors_ritems;
     RenderItemArray                 reflected_ritems;
     RenderItemArray                 shadow_ritems;
+    RenderItemArray                 reflected_shadow_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -552,9 +557,11 @@ create_render_items (
     RenderItemArray * mirrors_ritems,
     RenderItemArray * reflected_ritems,
     RenderItemArray * shadows_ritems,
+    RenderItemArray * reflected_shadow_ritems,
     MeshGeometry * room_geom, MeshGeometry * skull_geom,
     Material materials []
 ) {
+    // floor
     all_ritems->ritems[RITEM_FLOOR].world = Identity4x4();
     all_ritems->ritems[RITEM_FLOOR].tex_transform = Identity4x4();
     all_ritems->ritems[RITEM_FLOOR].obj_cbuffer_index = 0;
@@ -571,6 +578,7 @@ create_render_items (
     opaque_ritems->ritems[0] = all_ritems->ritems[RITEM_FLOOR];
     opaque_ritems->size++;
 
+    // wall
     all_ritems->ritems[RITEM_WALL].world = Identity4x4();
     all_ritems->ritems[RITEM_WALL].tex_transform = Identity4x4();
     all_ritems->ritems[RITEM_WALL].obj_cbuffer_index = 1;
@@ -587,6 +595,7 @@ create_render_items (
     opaque_ritems->ritems[1] = all_ritems->ritems[RITEM_WALL];
     opaque_ritems->size++;
 
+    // skull
     all_ritems->ritems[RITEM_SKULL].world = Identity4x4();
     all_ritems->ritems[RITEM_SKULL].tex_transform = Identity4x4();
     all_ritems->ritems[RITEM_SKULL].obj_cbuffer_index = 2;
@@ -609,18 +618,39 @@ create_render_items (
     all_ritems->size++;
     reflected_ritems->ritems[0] = all_ritems->ritems[RITEM_REFLECTED_SKULL];
     reflected_ritems->size++;
+    // reflected skull world matrix calculated later
+
+    // reflected floor.
+    all_ritems->ritems[RITEM_REFLECTED_FLOOR] = all_ritems->ritems[RITEM_FLOOR];
+    all_ritems->ritems[RITEM_REFLECTED_FLOOR].obj_cbuffer_index = 4;
+    all_ritems->size++;
+    // calculate reflected_floor world matrix
+    XMVECTOR mirror_plane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
+    XMMATRIX R = XMMatrixReflect(mirror_plane);
+    XMMATRIX floor_world = XMLoadFloat4x4(&all_ritems->ritems[RITEM_REFLECTED_FLOOR].world);
+    XMStoreFloat4x4(&all_ritems->ritems[RITEM_REFLECTED_FLOOR].world, floor_world * R);
+    reflected_ritems->ritems[1] = all_ritems->ritems[RITEM_REFLECTED_FLOOR];
+    reflected_ritems->size++;
 
     // shadowed skull will have different world matrix, so it needs to be its own render item.
     all_ritems->ritems[RITEM_SHADOWED_SKULL] = all_ritems->ritems[RITEM_SKULL];
-    all_ritems->ritems[RITEM_SHADOWED_SKULL].obj_cbuffer_index = 4;
+    all_ritems->ritems[RITEM_SHADOWED_SKULL].obj_cbuffer_index = 5;
     all_ritems->ritems[RITEM_SHADOWED_SKULL].mat = &materials[MAT_SHADOW];
     all_ritems->size++;
     shadows_ritems->ritems[0] = all_ritems->ritems[RITEM_SHADOWED_SKULL];
     shadows_ritems->size++;
 
+    // reflected shadow of the skull
+    all_ritems->ritems[RITEM_REFLECTED_SHADOW] = all_ritems->ritems[RITEM_SHADOWED_SKULL];
+    all_ritems->ritems[RITEM_REFLECTED_SHADOW].obj_cbuffer_index = 6;
+    all_ritems->size++;
+    reflected_shadow_ritems->ritems[0] = all_ritems->ritems[RITEM_REFLECTED_SHADOW];
+    reflected_shadow_ritems->size++;
+
+    // mirror
     all_ritems->ritems[RITEM_MIRROR].world = Identity4x4();
     all_ritems->ritems[RITEM_MIRROR].tex_transform = Identity4x4();
-    all_ritems->ritems[RITEM_MIRROR].obj_cbuffer_index = 5;
+    all_ritems->ritems[RITEM_MIRROR].obj_cbuffer_index = 7;
     all_ritems->ritems[RITEM_MIRROR].mat = &materials[MAT_ICE_MIRROR];
     all_ritems->ritems[RITEM_MIRROR].geometry = room_geom;
     all_ritems->ritems[RITEM_MIRROR].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -1097,10 +1127,17 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow_pso_desc = transparent_pso_desc;
     shadow_pso_desc.DepthStencilState = shadow_dss;
     render_ctx->device->CreateGraphicsPipelineState(&shadow_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_SHADOW]));
+
+    //
+    // -- Create PSO for reflected shadows (need both transparency and reflection stencil)
+    //
+    // ? can use LAYER_SHADOW pso ?
 }
 static void
 handle_keyboard_input (
-    RenderItem * skull, RenderItem * reflected_skull,
+    RenderItem * skull,
+    RenderItem * reflected_skull,
+    RenderItem * reflected_skull_shadow,
     RenderItem * shadowed_skull, XMFLOAT3 * light_dir,
     SceneContext * scene_ctx, GameTimer * gt
 ) {
@@ -1109,9 +1146,7 @@ handle_keyboard_input (
     */
     float dt = gt->delta_time;
 
-    // TODO(omid): Add code to handle keyboard input 
-    //
-
+    // Handle user inputs
 
 
     // Don't let user move below ground plane.
@@ -1136,9 +1171,15 @@ handle_keyboard_input (
     XMMATRIX shadow_y_offset = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
     XMStoreFloat4x4(&shadowed_skull->world, skull_world * S * shadow_y_offset);
 
+    // Update reflected skull shadow world matrix.
+    XMMATRIX reflected_shadow_world = XMLoadFloat4x4(&shadowed_skull->world);
+    XMStoreFloat4x4(&reflected_skull_shadow->world, reflected_shadow_world * R);
+
     skull->n_frames_dirty = NUM_QUEUING_FRAMES;
     reflected_skull->n_frames_dirty = NUM_QUEUING_FRAMES;
+    reflected_skull_shadow->n_frames_dirty = NUM_QUEUING_FRAMES;
     shadowed_skull->n_frames_dirty = NUM_QUEUING_FRAMES;
+
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
@@ -1428,6 +1469,16 @@ draw_main (D3DRenderContext * render_ctx) {
         render_ctx->srv_heap,
         &render_ctx->reflected_ritems, frame_index
     );
+    // 3.1 draw skull shadow reflection
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_SHADOW]);
+    draw_render_items(
+        render_ctx->direct_cmd_list,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->reflected_shadow_ritems, frame_index
+    );
 
     // 4. draw mirrors, this time into backbuffer (with transparency blending)
     // Restore [default] pass_cb and stencil ref
@@ -1443,7 +1494,7 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->transparent_ritems, frame_index
     );
 
-    // 5. draw shadows
+    // 5. draw skull shadows
     render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_SHADOW]);
     draw_render_items(
         render_ctx->direct_cmd_list,
@@ -2086,6 +2137,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         &render_ctx->mirrors_ritems,
         &render_ctx->reflected_ritems,
         &render_ctx->shadow_ritems,
+        &render_ctx->reflected_shadow_ritems,
         &render_ctx->geom[GEOM_ROOM],
         &render_ctx->geom[GEOM_SKULL],
         render_ctx->materials
@@ -2199,6 +2251,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         handle_keyboard_input(
             &render_ctx->all_ritems.ritems[RITEM_SKULL],
             &render_ctx->all_ritems.ritems[RITEM_REFLECTED_SKULL],
+            &render_ctx->all_ritems.ritems[RITEM_REFLECTED_SHADOW],
             &render_ctx->all_ritems.ritems[RITEM_SHADOWED_SKULL],
             &render_ctx->main_pass_constants.lights[0].direction,
             &global_scene_ctx, &global_timer
