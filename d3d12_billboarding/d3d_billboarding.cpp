@@ -969,6 +969,9 @@ create_pso (
     tree_pso_desc.PS.pShaderBytecode = pixel_shader_code_tree->GetBufferPointer();
     tree_pso_desc.PS.BytecodeLength = pixel_shader_code_tree->GetBufferSize();
     tree_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    tree_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+    tree_pso_desc.InputLayout.pInputElementDescs = treesprite_input_desc;
+    tree_pso_desc.InputLayout.NumElements = ARRAY_COUNT(treesprite_input_desc);
     render_ctx->device->CreateGraphicsPipelineState(&tree_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]));
 }
 static void
