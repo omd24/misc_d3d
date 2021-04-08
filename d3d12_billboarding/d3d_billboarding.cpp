@@ -117,6 +117,10 @@ struct RenderItemArray {
     uint32_t    size;
 };
 struct D3DRenderContext {
+
+    bool msaa4x_state;
+    UINT msaa4x_quality;
+
     // Used formats
     struct {
         DXGI_FORMAT backbuffer_format;
@@ -205,6 +209,7 @@ load_texture (
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
     desc.Format = DXGI_FORMAT_UNKNOWN;
+    // TODO(omid): do we need to set 4x MSAA here? 
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -882,8 +887,8 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     opaque_pso_desc.NumRenderTargets = 1;
     opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
-    opaque_pso_desc.SampleDesc.Count = 1;
-    opaque_pso_desc.SampleDesc.Quality = 0;
+    opaque_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
     //
@@ -1184,29 +1189,29 @@ move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT 
 
     return ret;
 }
-static HRESULT
-wait_for_gpu (D3DRenderContext * render_ctx) {
-    HRESULT ret = E_FAIL;
+static void
+flush_command_queue (D3DRenderContext * render_ctx) {
+    // Advance the fence value to mark commands up to this fence point.
+    render_ctx->main_current_fence++;
 
-    /*UINT frame_index = render_ctx->frame_index;*/
+    // Add an instruction to the command queue to set a new fence point.  Because we 
+    // are on the GPU timeline, the new fence point won't be set until the GPU finishes
+    // processing all the commands prior to this Signal().
+    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
 
-    // Do it for all queuing frames to do a thorough cleanup
+    // Wait until the GPU has completed commands up to this fence point.
+    if (render_ctx->fence->GetCompletedValue() < render_ctx->main_current_fence) {
+        HANDLE event_handle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-    for (unsigned i = 0; i < NUM_QUEUING_FRAMES; i++) {
+        // Fire event when GPU hits current fence.  
+        render_ctx->fence->SetEventOnCompletion(render_ctx->main_current_fence, event_handle);
 
-        // -- 1. schedule a signal command in the queue
-        ret = render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->frame_resources[i].fence);
-        CHECK_AND_FAIL(ret);
-
-        // -- 2. wait until the fence has been processed
-        ret = render_ctx->fence->SetEventOnCompletion(render_ctx->frame_resources[i].fence, render_ctx->fence_event);
-        CHECK_AND_FAIL(ret);
-        WaitForSingleObjectEx(render_ctx->fence_event, INFINITE /*return only when the object is signaled*/, false);
-
-        // -- 3. increment fence value for the current frame
-        ++render_ctx->frame_resources[i].fence;
+        // Wait until the GPU hits current fence event is fired.
+        if (event_handle != 0) {
+            WaitForSingleObject(event_handle, INFINITE);
+            CloseHandle(event_handle);
+        }
     }
-    return ret;
 }
 static D3D12_RESOURCE_BARRIER
 create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
@@ -1378,30 +1383,11 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     // -- specify formats
     render_ctx->backbuffer_format   = DXGI_FORMAT_R8G8B8A8_UNORM;
     render_ctx->depthstencil_format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-}
-static void
-flush_command_queue (D3DRenderContext * render_ctx) {
-    // Advance the fence value to mark commands up to this fence point.
-    render_ctx->main_current_fence++;
 
-    // Add an instruction to the command queue to set a new fence point.  Because we 
-    // are on the GPU timeline, the new fence point won't be set until the GPU finishes
-    // processing all the commands prior to this Signal().
-    render_ctx->cmd_queue->Signal(render_ctx->fence, render_ctx->main_current_fence);
-
-    // Wait until the GPU has completed commands up to this fence point.
-    if (render_ctx->fence->GetCompletedValue() < render_ctx->main_current_fence) {
-        HANDLE event_handle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-
-        // Fire event when GPU hits current fence.  
-        render_ctx->fence->SetEventOnCompletion(render_ctx->main_current_fence, event_handle);
-
-        // Wait until the GPU hits current fence event is fired.
-        if (event_handle != 0) {
-            WaitForSingleObject(event_handle, INFINITE);
-            CloseHandle(event_handle);
-        }
-    }
+    // -- 4x MSAA enabled ?
+    render_ctx->msaa4x_state = false;
+    _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
+    // TODO(omid): enable msaa4x and solve the resize, swapchain, etc. issues.
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx) {
@@ -1414,9 +1400,8 @@ d3d_resize (D3DRenderContext * render_ctx) {
         render_ctx->direct_cmd_list_alloc &&
         render_ctx->swapchain
         ) {
-            // Flush before changing any resources.
+        // Flush before changing any resources.
         flush_command_queue(render_ctx);
-        //wait_for_gpu(render_ctx);
 
         render_ctx->direct_cmd_list->Reset(render_ctx->direct_cmd_list_alloc, nullptr);
 
@@ -1457,8 +1442,8 @@ d3d_resize (D3DRenderContext * render_ctx) {
         //   2. DSV Format: DXGI_FORMAT_D24_UNORM_S8_UINT
         // we need to create the depth buffer resource with a typeless format.  
         depth_stencil_desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
-        depth_stencil_desc.SampleDesc.Count = 1;
-        depth_stencil_desc.SampleDesc.Quality = 0;
+        depth_stencil_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+        depth_stencil_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
         depth_stencil_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         depth_stencil_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -1501,7 +1486,6 @@ d3d_resize (D3DRenderContext * render_ctx) {
 
         // Wait until resize is complete.
         flush_command_queue(render_ctx);
-        //wait_for_gpu(render_ctx);
 
         // Update the viewport transform to cover the client area.
         render_ctx->viewport.TopLeftX = 0;
@@ -1702,6 +1686,20 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // store CBV_SRV_UAV descriptor increment size for later
     render_ctx->cbv_srv_uav_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+    // Check 4X MSAA quality support for our back buffer format.
+    D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS quality_levels;
+    quality_levels.Format = render_ctx->backbuffer_format;
+    quality_levels.SampleCount = 4;
+    quality_levels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+    quality_levels.NumQualityLevels = 0;
+    render_ctx->device->CheckFeatureSupport(
+        D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+        &quality_levels,
+        sizeof(quality_levels)
+    );
+    render_ctx->msaa4x_quality = quality_levels.NumQualityLevels;
+    _ASSERT_EXPR(render_ctx->msaa4x_quality > 0, "Unexpected MSAA quality level.");
+
 #pragma region Create Command Objects
     // Create Command Queue
     D3D12_COMMAND_QUEUE_DESC cmd_q_desc = {};
@@ -1742,6 +1740,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     DXGI_SAMPLE_DESC sampler_desc = {};
     sampler_desc.Count = 1;
     sampler_desc.Quality = 0;
+    // TODO(omid): should we enable 4x msaa here ? 
+    /*sampler_desc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    sampler_desc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;*/
+
 
     // Create Swapchain
     DXGI_SWAP_CHAIN_DESC swapchain_desc = {};
@@ -1768,28 +1770,32 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     wcscpy_s(render_ctx->textures[TEX_CRATE01].filename, L"../Textures/WoodCrate02.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_CRATE01].filename, &render_ctx->textures[TEX_CRATE01]
+        render_ctx->textures[TEX_CRATE01].filename,
+        &render_ctx->textures[TEX_CRATE01]
     );
     // water
     strcpy_s(render_ctx->textures[TEX_WATER].name, "watertex");
     wcscpy_s(render_ctx->textures[TEX_WATER].filename, L"../Textures/water1.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WATER].filename, &render_ctx->textures[TEX_WATER]
+        render_ctx->textures[TEX_WATER].filename,
+        &render_ctx->textures[TEX_WATER]
     );
     // grass
     strcpy_s(render_ctx->textures[TEX_GRASS].name, "grasstex");
     wcscpy_s(render_ctx->textures[TEX_GRASS].filename, L"../Textures/grass.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_GRASS].filename, &render_ctx->textures[TEX_GRASS]
+        render_ctx->textures[TEX_GRASS].filename,
+        &render_ctx->textures[TEX_GRASS]
     );
     // wire_fence
     strcpy_s(render_ctx->textures[TEX_WIREFENCE].name, "wirefencetex");
     wcscpy_s(render_ctx->textures[TEX_WIREFENCE].filename, L"../Textures/WireFence.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WIREFENCE].filename, &render_ctx->textures[TEX_WIREFENCE]
+        render_ctx->textures[TEX_WIREFENCE].filename,
+        &render_ctx->textures[TEX_WIREFENCE]
     );
 #pragma endregion
 
@@ -1814,6 +1820,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     ds_desc.SampleDesc.Count = 1;
     ds_desc.SampleDesc.Quality = 0;
+    // TODO(omid): should we enable 4x MSAA here? 
+    /*ds_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    ds_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;*/
     ds_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     ds_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -2006,10 +2015,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         CHECK_AND_FAIL(HRESULT_FROM_WIN32(GetLastError()));
     }
 
-    // Wait for the command list to execute; we are reusing the same command 
-    // list in our main loop but for now, we just want to wait for setup to 
-    // complete before continuing.
-    CHECK_AND_FAIL(wait_for_gpu(render_ctx));
+    // Wait for the command list to execute; 
+    // we just want to wait for setup to complete before continuing.
+    flush_command_queue(render_ctx);
 
 #pragma endregion
 
@@ -2041,7 +2049,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoScrollbar;
     window_flags |= ImGuiWindowFlags_MenuBar;
-    window_flags |= ImGuiWindowFlags_NoMove;
+    //window_flags |= ImGuiWindowFlags_NoMove;
     window_flags |= ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_NoNav;
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -2117,7 +2125,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // ========================================================================================================
 #pragma region Cleanup_And_Debug
-    CHECK_AND_FAIL(wait_for_gpu(render_ctx));
+    flush_command_queue(render_ctx);
 
     // Cleanup Imgui
     ImGui_ImplDX12_Shutdown();
