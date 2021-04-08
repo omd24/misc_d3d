@@ -39,6 +39,7 @@ enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
     LAYER_TRANSPARENT = 1,
     LAYER_ALPHATESTED = 2,
+    LAYER_ALPHATESTED_TREESPRITES = 3,
 
     _COUNT_RENDER_LAYER
 };
@@ -69,6 +70,7 @@ enum TEX_INDEX {
     TEX_WATER = 1,
     TEX_GRASS = 2,
     TEX_WIREFENCE = 3,
+    TEX_TREEARRAY = 4,
 
     _COUNT_TEX
 };
@@ -636,6 +638,19 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
     render_ctx->device->CreateShaderResourceView(wire_tex, &srv_desc, descriptor_cpu_handle);
 
+    // tree_array texture
+    ID3D12Resource * tree_tex = render_ctx->textures[TEX_TREEARRAY].resource;
+    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Format = tree_tex->GetDesc().Format;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv_desc.Texture2DArray.MostDetailedMip = 0;
+    srv_desc.Texture2DArray.MipLevels = tree_tex->GetDesc().MipLevels;
+    srv_desc.Texture2DArray.FirstArraySlice = 0;
+    srv_desc.Texture2DArray.ArraySize = tree_tex->GetDesc().DepthOrArraySize;
+    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
+    render_ctx->device->CreateShaderResourceView(tree_tex, &srv_desc, descriptor_cpu_handle);
+
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
     rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS;
@@ -803,34 +818,58 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
 }
 static void
-create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBlob * pixel_shader_code_opaque, IDxcBlob * pixel_shader_code_alphatested) {
+create_pso (
+    D3DRenderContext * render_ctx,
+    IDxcBlob * vertex_shader_code_std,
+    IDxcBlob * pixel_shader_code_opaque,
+    IDxcBlob * pixel_shader_code_alphatested,
+    IDxcBlob * vertex_shader_code_tree,
+    IDxcBlob * geo_shader_code_tree,
+    IDxcBlob * pixel_shader_code_tree
+) {
     // -- Create vertex-input-layout Elements
 
-    D3D12_INPUT_ELEMENT_DESC input_desc[3];
-    input_desc[0] = {};
-    input_desc[0].SemanticName = "POSITION";
-    input_desc[0].SemanticIndex = 0;
-    input_desc[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    input_desc[0].InputSlot = 0;
-    input_desc[0].AlignedByteOffset = 0;
-    input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    D3D12_INPUT_ELEMENT_DESC std_input_desc[3];
+    std_input_desc[0] = {};
+    std_input_desc[0].SemanticName = "POSITION";
+    std_input_desc[0].SemanticIndex = 0;
+    std_input_desc[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    std_input_desc[0].InputSlot = 0;
+    std_input_desc[0].AlignedByteOffset = 0;
+    std_input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
-    input_desc[1] = {};
-    input_desc[1].SemanticName = "NORMAL";
-    input_desc[1].SemanticIndex = 0;
-    input_desc[1].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    input_desc[1].InputSlot= 0;
-    input_desc[1].AlignedByteOffset = 12; // bc of the position byte-size
-    input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    std_input_desc[1] = {};
+    std_input_desc[1].SemanticName = "NORMAL";
+    std_input_desc[1].SemanticIndex = 0;
+    std_input_desc[1].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    std_input_desc[1].InputSlot= 0;
+    std_input_desc[1].AlignedByteOffset = 12;
+    std_input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
-    input_desc[2] = {};
-    input_desc[2].SemanticName = "TEXCOORD";
-    input_desc[2].SemanticIndex = 0;
-    input_desc[2].Format = DXGI_FORMAT_R32G32_FLOAT;
-    input_desc[2].InputSlot = 0;
-    input_desc[2].AlignedByteOffset = 24; // bc of the position and normal
-    input_desc[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    std_input_desc[2] = {};
+    std_input_desc[2].SemanticName = "TEXCOORD";
+    std_input_desc[2].SemanticIndex = 0;
+    std_input_desc[2].Format = DXGI_FORMAT_R32G32_FLOAT;
+    std_input_desc[2].InputSlot = 0;
+    std_input_desc[2].AlignedByteOffset = 24;
+    std_input_desc[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
+    D3D12_INPUT_ELEMENT_DESC treesprite_input_desc[2];
+    treesprite_input_desc[0] = {};
+    treesprite_input_desc[0].SemanticName = "POSITION";
+    treesprite_input_desc[0].SemanticIndex = 0;
+    treesprite_input_desc[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+    treesprite_input_desc[0].InputSlot = 0;
+    treesprite_input_desc[0].AlignedByteOffset = 0;
+    treesprite_input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    treesprite_input_desc[1] = {};
+    treesprite_input_desc[1].SemanticName = "SIZE";
+    treesprite_input_desc[1].SemanticIndex = 0;
+    treesprite_input_desc[1].Format = DXGI_FORMAT_R32G32_FLOAT;
+    treesprite_input_desc[1].InputSlot = 0;
+    treesprite_input_desc[1].AlignedByteOffset = 12;
+    treesprite_input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
     //
     // -- Create PSO for Opaque objs
     //
@@ -873,8 +912,8 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
     opaque_pso_desc.pRootSignature = render_ctx->root_signature;
-    opaque_pso_desc.VS.pShaderBytecode = vertex_shader_code->GetBufferPointer();
-    opaque_pso_desc.VS.BytecodeLength = vertex_shader_code->GetBufferSize();
+    opaque_pso_desc.VS.pShaderBytecode = vertex_shader_code_std->GetBufferPointer();
+    opaque_pso_desc.VS.BytecodeLength = vertex_shader_code_std->GetBufferSize();
     opaque_pso_desc.PS.pShaderBytecode = pixel_shader_code_opaque->GetBufferPointer();
     opaque_pso_desc.PS.BytecodeLength = pixel_shader_code_opaque->GetBufferSize();
     opaque_pso_desc.BlendState = def_blend_desc;
@@ -882,8 +921,8 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     opaque_pso_desc.RasterizerState = def_rasterizer_desc;
     opaque_pso_desc.DepthStencilState = ds_desc;
     opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
-    opaque_pso_desc.InputLayout.pInputElementDescs = input_desc;
-    opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(input_desc);
+    opaque_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
+    opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
     opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     opaque_pso_desc.NumRenderTargets = 1;
     opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
@@ -918,6 +957,19 @@ create_pso (D3DRenderContext * render_ctx, IDxcBlob * vertex_shader_code, IDxcBl
     alpha_pso_desc.PS.BytecodeLength = pixel_shader_code_alphatested->GetBufferSize();
     alpha_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED]));
+
+    //
+    // -- Create PSO for Tree sprites
+    //
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC tree_pso_desc = opaque_pso_desc;
+    tree_pso_desc.VS.pShaderBytecode = vertex_shader_code_tree->GetBufferPointer();
+    tree_pso_desc.VS.BytecodeLength = vertex_shader_code_tree->GetBufferSize();
+    tree_pso_desc.GS.pShaderBytecode = geo_shader_code_tree->GetBufferPointer();
+    tree_pso_desc.GS.BytecodeLength = geo_shader_code_tree->GetBufferSize();
+    tree_pso_desc.PS.pShaderBytecode = pixel_shader_code_tree->GetBufferPointer();
+    tree_pso_desc.PS.BytecodeLength = pixel_shader_code_tree->GetBufferSize();
+    tree_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    render_ctx->device->CreateGraphicsPipelineState(&tree_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1797,6 +1849,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->textures[TEX_WIREFENCE].filename,
         &render_ctx->textures[TEX_WIREFENCE]
     );
+    // tree_array
+    strcpy_s(render_ctx->textures[TEX_TREEARRAY].name, "treearraytex");
+    wcscpy_s(render_ctx->textures[TEX_TREEARRAY].filename, L"../Textures/treeArray2.dds");
+    load_texture(
+        render_ctx->device, render_ctx->direct_cmd_list,
+        render_ctx->textures[TEX_TREEARRAY].filename,
+        &render_ctx->textures[TEX_TREEARRAY]
+    );
 #pragma endregion
 
     create_descriptor_heaps(render_ctx);
@@ -1919,56 +1979,108 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // if (FAILED(hr)) Handle error
 
     wchar_t const * shaders_path = L"./shaders/default.hlsl";
+    wchar_t const * tree_shader_path = L"./shaders/tree_sprite.hlsl";
     uint32_t code_page = CP_UTF8;
     IDxcBlobEncoding * shader_blob = nullptr;
+    IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need a different blob for trees
     IDxcOperationResult * dxc_res = nullptr;
     IDxcBlob * vertex_shader_code = nullptr;
     IDxcBlob * pixel_shader_code_opaque = nullptr;
     IDxcBlob * pixel_shader_code_alphatest = nullptr;
-    hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
-    if (shader_blob) {
-        IDxcIncludeHandler * include_handler = nullptr;
-        int const n_define_fog = 1;
-        DxcDefine defines_fog[n_define_fog] = {};
-        defines_fog[0].Name = L"FOG";
-        defines_fog[0].Value = L"1";
-        int const n_define_alphatest = 2;
-        DxcDefine defines_alphatest[n_define_alphatest] = {};
-        defines_alphatest[0].Name = L"FOG";
-        defines_alphatest[0].Value = L"1";
-        defines_alphatest[1].Name = L"ALPHA_TEST";
-        defines_alphatest[1].Value = L"1";
+    IDxcBlob * vertex_shader_code_tree = nullptr;
+    IDxcBlob * geo_shader_code_tree = nullptr;
+    IDxcBlob * pixel_shader_code_tree = nullptr;
+    {   // standard shaders
+        hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
+        if (shader_blob) {
+            IDxcIncludeHandler * include_handler = nullptr;
+            int const n_define_fog = 1;
+            DxcDefine defines_fog[n_define_fog] = {};
+            defines_fog[0].Name = L"FOG";
+            defines_fog[0].Value = L"1";
+            int const n_define_alphatest = 2;
+            DxcDefine defines_alphatest[n_define_alphatest] = {};
+            defines_alphatest[0].Name = L"FOG";
+            defines_alphatest[0].Value = L"1";
+            defines_alphatest[1].Name = L"ALPHA_TEST";
+            defines_alphatest[1].Value = L"1";
 
-        dxc_lib->CreateIncludeHandler(&include_handler);
-        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-        dxc_res->GetStatus(&hr);
-        dxc_res->GetResult(&vertex_shader_code);
-        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
-        dxc_res->GetStatus(&hr);
-        dxc_res->GetResult(&pixel_shader_code_opaque);
-        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
-        dxc_res->GetStatus(&hr);
-        dxc_res->GetResult(&pixel_shader_code_alphatest);
-        if (FAILED(hr)) {
-            if (dxc_res) {
-                IDxcBlobEncoding * errorsBlob = nullptr;
-                hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                if (SUCCEEDED(hr) && errorsBlob) {
-                    OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                    return(0);
+            dxc_lib->CreateIncludeHandler(&include_handler);
+            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&vertex_shader_code);
+            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&pixel_shader_code_opaque);
+            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&pixel_shader_code_alphatest);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
                 }
+                // Handle compilation error...
             }
-            // Handle compilation error...
+        }
+    }
+    {   // tree-sprite shaders
+        hr = dxc_lib->CreateBlobFromFile(tree_shader_path, &code_page, &shader_blob_trees);
+        if (shader_blob_trees) {
+            IDxcIncludeHandler * include_handler = nullptr;
+            int const n_define_alphatest = 2;
+            DxcDefine defines_alphatest[n_define_alphatest] = {};
+            defines_alphatest[0].Name = L"FOG";
+            defines_alphatest[0].Value = L"1";
+            defines_alphatest[1].Name = L"ALPHA_TEST";
+            defines_alphatest[1].Value = L"1";
+
+            dxc_lib->CreateIncludeHandler(&include_handler);
+            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"VS_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&vertex_shader_code_tree);
+            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"GS_Main", L"gs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&geo_shader_code_tree);
+            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"PS_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&pixel_shader_code_tree);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
         }
     }
     _ASSERT_EXPR(vertex_shader_code, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_alphatest, "invalid shader");
+    _ASSERT_EXPR(vertex_shader_code_tree, "invalid shader");
+    _ASSERT_EXPR(geo_shader_code_tree, "invalid shader");
+    _ASSERT_EXPR(pixel_shader_code_tree, "invalid shader");
 
 #pragma endregion Compile_Shaders
 
 #pragma region PSO_Creation
-    create_pso(render_ctx, vertex_shader_code, pixel_shader_code_opaque, pixel_shader_code_alphatest);
+    create_pso(
+        render_ctx,
+        vertex_shader_code,
+        pixel_shader_code_opaque,
+        pixel_shader_code_alphatest,
+        vertex_shader_code_tree,
+        geo_shader_code_tree,
+        pixel_shader_code_tree
+    );
 #pragma endregion PSO_Creation
 
 #pragma region Shapes_And_Renderitem_Creation
@@ -2162,6 +2274,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->psos[i]->Release();
     }
 
+    pixel_shader_code_tree->Release();
+    geo_shader_code_tree->Release();
+    vertex_shader_code_tree->Release();
     pixel_shader_code_alphatest->Release();
     pixel_shader_code_opaque->Release();
     vertex_shader_code->Release();
