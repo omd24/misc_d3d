@@ -47,6 +47,7 @@ enum ALL_RENDERITEMS {
     RITEM_WATER = 0,
     RITEM_GRID = 1,
     RITEM_BOX = 2,
+    RITEM_TREESPRITE = 3,
 
     _COUNT_RENDERITEM
 };
@@ -54,6 +55,7 @@ enum GEOM_INDEX {
     GEOM_BOX = 0,
     GEOM_WATER = 1,
     GEOM_GRID = 2,
+    GEOM_TREESPRITE = 3,
 
     _COUNT_GEOM
 };
@@ -62,6 +64,7 @@ enum MAT_INDEX {
     MAT_GRASS = 1,
     MAT_WATER = 2,
     MAT_WIRED_CRATE = 3,
+    MAT_TREE_SPRITE = 4,
 
     _COUNT_MATERIAL
 };
@@ -159,6 +162,7 @@ struct D3DRenderContext {
     RenderItemArray                 opaque_ritems;
     RenderItemArray                 transparent_ritems;
     RenderItemArray                 alphatested_ritems;
+    RenderItemArray                 alphatested_treesprites_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -281,6 +285,15 @@ create_materials (Material out_materials []) {
     out_materials[MAT_WIRED_CRATE].roughness = 0.2f;
     out_materials[MAT_WIRED_CRATE].mat_transform = Identity4x4();
     out_materials[MAT_WIRED_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
+
+    strcpy_s(out_materials[MAT_TREE_SPRITE].name, "tree_sprites");
+    out_materials[MAT_TREE_SPRITE].mat_cbuffer_index = 4;
+    out_materials[MAT_TREE_SPRITE].diffuse_srvheap_index = 4;
+    out_materials[MAT_TREE_SPRITE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_TREE_SPRITE].fresnel_r0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
+    out_materials[MAT_TREE_SPRITE].roughness = 0.125f;
+    out_materials[MAT_TREE_SPRITE].mat_transform = Identity4x4();
+    out_materials[MAT_TREE_SPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static float
 calc_hill_height (float x, float z) {
@@ -482,12 +495,67 @@ create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * rende
     ::free(vertices);
 }
 static void
+create_treesprites_geometry (D3DRenderContext * render_ctx) {
+    struct TreeSpriteVertex {
+        XMFLOAT3 pos;
+        XMFLOAT2 size;
+    };
+
+    constexpr int tree_count = 16;
+    TreeSpriteVertex vertices[tree_count];
+
+    for (UINT i = 0; i < tree_count; i++) {
+        float x = rand_float(-45.0f, 45.0f);
+        float z = rand_float(-45.0f, 45.0f);
+        float y = calc_hill_height(x, z);
+
+        // a bit of offset
+        y += 8.0f;
+
+        vertices[i].pos = XMFLOAT3(x, y, z);
+        vertices[i].size = XMFLOAT2(20.0f, 20.0f);
+    }
+
+    uint16_t indices[tree_count] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15
+    };
+
+    UINT vb_byte_size = tree_count * sizeof(TreeSpriteVertex);
+    UINT ib_byte_size = tree_count * sizeof(uint16_t);
+
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_cpu);
+    if (vertices)
+        CopyMemory(render_ctx->geom[GEOM_TREESPRITE].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_cpu);
+    if (indices)
+        CopyMemory(render_ctx->geom[GEOM_TREESPRITE].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_uploader, &render_ctx->geom[GEOM_TREESPRITE].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_uploader, &render_ctx->geom[GEOM_TREESPRITE].ib_gpu);
+
+    render_ctx->geom[GEOM_TREESPRITE].vb_byte_stide = sizeof(TreeSpriteVertex);
+    render_ctx->geom[GEOM_TREESPRITE].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_TREESPRITE].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_TREESPRITE].index_format = DXGI_FORMAT_R16_UINT;
+
+    SubmeshGeometry submesh;
+    submesh.index_count = tree_count;
+    submesh.start_index_location = 0;
+    submesh.base_vertex_location = 0;
+
+    render_ctx->geom[GEOM_TREESPRITE].submesh_names[0] = "points";
+    render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0] = submesh;
+}
+static void
 create_render_items (
     RenderItemArray * all_ritems,
     RenderItemArray * opaque_ritems,
     RenderItemArray * transparent_ritems,
     RenderItemArray * alphatested_ritems,
-    MeshGeometry * box_geom, MeshGeometry * water_geom, MeshGeometry * grid_geom,
+    RenderItemArray * alphatested_treesprites_ritems,
+    MeshGeometry * box_geom, MeshGeometry * water_geom, MeshGeometry * grid_geom, MeshGeometry * treesprites_geom,
     Material materials []
 ) {
     all_ritems->ritems[RITEM_WATER].world = Identity4x4();
@@ -540,6 +608,22 @@ create_render_items (
     all_ritems->size++;
     alphatested_ritems->ritems[0] = all_ritems->ritems[RITEM_BOX];
     alphatested_ritems->size++;
+
+    all_ritems->ritems[RITEM_TREESPRITE].world = Identity4x4();
+    all_ritems->ritems[RITEM_TREESPRITE].tex_transform = Identity4x4();
+    all_ritems->ritems[RITEM_TREESPRITE].obj_cbuffer_index = 3;
+    all_ritems->ritems[RITEM_TREESPRITE].geometry = treesprites_geom;
+    all_ritems->ritems[RITEM_TREESPRITE].mat = &materials[MAT_TREE_SPRITE];
+    all_ritems->ritems[RITEM_TREESPRITE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+    all_ritems->ritems[RITEM_TREESPRITE].index_count = treesprites_geom->submesh_geoms[0].index_count;
+    all_ritems->ritems[RITEM_TREESPRITE].start_index_loc = treesprites_geom->submesh_geoms[0].start_index_location;
+    all_ritems->ritems[RITEM_TREESPRITE].base_vertex_loc = treesprites_geom->submesh_geoms[0].base_vertex_location;
+    all_ritems->ritems[RITEM_TREESPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_TREESPRITE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_TREESPRITE].initialized = true;
+    all_ritems->size++;
+    alphatested_treesprites_ritems->ritems[0] = all_ritems->ritems[RITEM_TREESPRITE];
+    alphatested_treesprites_ritems->size++;
 }
 // -- indexed drawing
 static void
@@ -1149,20 +1233,6 @@ animate_material (Material * mat, GameTimer * timer) {
     // Material has changed, so need to update cbuffer.
     mat->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
-static int
-rand_int (int a, int b) {
-    return a + rand() % ((b - a) + 1);
-}
-// Returns random float in [0, 1).
-static float
-rand_float () {
-    return (float)(rand()) / (float)RAND_MAX;
-}
-// Returns random float in [a, b).
-static float
-rand_float (float a, float b) {
-    return a + rand_float() * (b - a);
-}
 static void
 update_waves_vb (Waves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
     float total_time = Timer_GetTotalTime(timer);
@@ -1335,7 +1405,7 @@ draw_main (D3DRenderContext * render_ctx) {
         render_ctx->srv_heap,
         &render_ctx->opaque_ritems, frame_index
     );
-    // 2. draw alpha-tested obj(s)
+    // 2. draw alpha-tested box/crate
     render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
     draw_render_items(
         render_ctx->direct_cmd_list,
@@ -1345,7 +1415,17 @@ draw_main (D3DRenderContext * render_ctx) {
         render_ctx->srv_heap,
         &render_ctx->alphatested_ritems, frame_index
     );
-    // 3. draw transparent objs
+    // 3. draw tree-sprites
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
+    draw_render_items(
+        render_ctx->direct_cmd_list,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->alphatested_treesprites_ritems, frame_index
+    );
+    // 4. draw transparent objs
     render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_TRANSPARENT]);
     draw_render_items(
         render_ctx->direct_cmd_list,
@@ -2072,7 +2152,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     _ASSERT_EXPR(geo_shader_code_tree, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_tree, "invalid shader");
 
-#pragma endregion Compile_Shaders
+#pragma endregion
 
 #pragma region PSO_Creation
     create_pso(
@@ -2089,7 +2169,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Shapes_And_Renderitem_Creation
     create_land_geometry(render_ctx);
     create_water_geometry(waves->nrow, waves->ncol, waves->ntri, render_ctx);
-
+    create_treesprites_geometry(render_ctx);
     create_shape_geometry(render_ctx);
     create_materials(render_ctx->materials);
     create_render_items(
@@ -2097,9 +2177,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         &render_ctx->opaque_ritems,
         &render_ctx->transparent_ritems,
         &render_ctx->alphatested_ritems,
+        &render_ctx->alphatested_treesprites_ritems,
         &render_ctx->geom[GEOM_BOX],
         &render_ctx->geom[GEOM_WATER],
         &render_ctx->geom[GEOM_GRID],
+        &render_ctx->geom[GEOM_TREESPRITE],
         render_ctx->materials
     );
 

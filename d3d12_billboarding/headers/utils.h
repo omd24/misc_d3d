@@ -200,6 +200,22 @@ Identity4x4() {
 
     return I;
 }
+
+static int
+rand_int (int a, int b) {
+    return a + rand() % ((b - a) + 1);
+}
+// Returns random float in [0, 1).
+static float
+rand_float () {
+    return (float)(rand()) / (float)RAND_MAX;
+}
+// Returns random float in [a, b).
+static float
+rand_float (float a, float b) {
+    return a + rand_float() * (b - a);
+}
+
 static void
 create_upload_buffer (ID3D12Device * device, UINT64 total_size, BYTE ** mapped_data, ID3D12Resource ** out_upload_buffer) {
 

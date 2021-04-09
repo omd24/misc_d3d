@@ -122,7 +122,7 @@ GS_Main (
     GeoShaderOutput gout;
     [unroll]
     for (int i = 0; i < 4; ++i) {
-        gout.pos_homogenous = mul(v[i], global_inv_view_proj);
+        gout.pos_homogenous = mul(v[i], global_view_proj);
         gout.pos_world = v[i].xyz;
         gout.normal_world = look;
         gout.texc = texc[i];
