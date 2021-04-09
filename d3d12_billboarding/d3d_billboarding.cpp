@@ -1,3 +1,11 @@
+// TODO(omid): Add support for MSAA 
+/* 
+https://github.com/gpuweb/gpuweb/issues/108
+https://docs.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_swap_effect
+https://www.gamedev.net/blogs/entry/2262563-adding-msaa-and-stream-output-support/
+
+*/
+
 #include "headers/common.h"
 
 #include <dxgi1_6.h>
@@ -505,12 +513,12 @@ create_treesprites_geometry (D3DRenderContext * render_ctx) {
     TreeSpriteVertex vertices[tree_count];
 
     for (UINT i = 0; i < tree_count; i++) {
-        float x = rand_float(-45.0f, 45.0f);
-        float z = rand_float(-45.0f, 45.0f);
+        float x = rand_float(-105.0f, 105.0f);
+        float z = rand_float(20.0f, 55.0f);
         float y = calc_hill_height(x, z);
 
         // a bit of offset
-        y += 8.0f;
+        y += 9.0f;
 
         vertices[i].pos = XMFLOAT3(x, y, z);
         vertices[i].size = XMFLOAT2(20.0f, 20.0f);
@@ -981,6 +989,7 @@ create_pso (
     def_rasterizer_desc.DepthClipEnable = TRUE;
     def_rasterizer_desc.ForcedSampleCount = 0;
     def_rasterizer_desc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+    def_rasterizer_desc.MultisampleEnable = render_ctx->msaa4x_state;
 
     /* Depth Stencil Description */
     D3D12_DEPTH_STENCIL_DESC ds_desc = {};
@@ -1522,7 +1531,6 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     // -- 4x MSAA enabled ?
     render_ctx->msaa4x_state = false;
     _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
-    // TODO(omid): enable msaa4x and solve the resize, swapchain, etc. issues.
 }
 static void
 d3d_resize (D3DRenderContext * render_ctx) {
@@ -1873,14 +1881,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     backbuffer_desc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
 
     DXGI_SAMPLE_DESC sampler_desc = {};
-    sampler_desc.Count = 1;
-    sampler_desc.Quality = 0;
-    // TODO(omid): should we enable 4x msaa here ? 
-    /*sampler_desc.Count = render_ctx->msaa4x_state ? 4 : 1;
-    sampler_desc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;*/
+    if (render_ctx->msaa4x_state) {
+        sampler_desc.Count = 1;
+        sampler_desc.Quality = 0;
+    } else {
+        sampler_desc.Count = render_ctx->msaa4x_state ? 4 : 1;
+        sampler_desc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
+    }
 
-
-    // Create Swapchain
+        // Create Swapchain
     DXGI_SWAP_CHAIN_DESC swapchain_desc = {};
     swapchain_desc.BufferDesc = backbuffer_desc;
     swapchain_desc.SampleDesc = sampler_desc;
@@ -1960,12 +1969,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     //   2. DSV Format: DXGI_FORMAT_D24_UNORM_S8_UINT
     // we need to create the depth buffer resource with a typeless format.  
     ds_desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
-
-    ds_desc.SampleDesc.Count = 1;
-    ds_desc.SampleDesc.Quality = 0;
-    // TODO(omid): should we enable 4x MSAA here? 
-    /*ds_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
-    ds_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;*/
+    ds_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    ds_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
     ds_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     ds_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -2002,19 +2007,18 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion Dsv_Creation
 
-#pragma region Rtv_Creation
-    // -- create frame resources: rtv, cmd-allocator and cbuffers for each frame
+#pragma region Create RTV
+    // -- create frame resources: rtv for each frame
     render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle_start = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < NUM_BACKBUFFERS; ++i) {
-        /*CHECK_AND_FAIL(render_ctx->swapchain3->GetBuffer(i, IID_PPV_ARGS(&render_ctx->render_targets[i])));*/
         render_ctx->swapchain->GetBuffer(i, IID_PPV_ARGS(&render_ctx->render_targets[i]));
         D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = {};
         cpu_handle.ptr = rtv_handle_start.ptr + ((UINT64)i * render_ctx->rtv_descriptor_size);
         // -- create a rtv for each frame
         render_ctx->device->CreateRenderTargetView(render_ctx->render_targets[i], nullptr, cpu_handle);
     }
-#pragma endregion Rtv_Creation
+#pragma endregion
 
 #pragma region Create CBuffers and Dynamic Vertex Buffer (waves_vb)
     UINT obj_cb_size = sizeof(ObjectConstants);
