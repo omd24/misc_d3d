@@ -10,7 +10,7 @@
 #include "headers/game_timer.h"
 #include "headers/dds_loader.h"
 
-#include "waves.h"
+#include "gpu_waves.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_win32.h>
@@ -42,6 +42,7 @@ enum RENDER_LAYER : int {
     LAYER_TRANSPARENT = 1,
     LAYER_ALPHATESTED = 2,
     LAYER_ALPHATESTED_TREESPRITES = 3,
+    LAYER_GPU_WAVES = 4,
 
     _COUNT_RENDER_LAYER
 };
@@ -683,11 +684,11 @@ draw_render_items (
     }
 }
 static void
-create_descriptor_heaps (D3DRenderContext * render_ctx) {
+create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX + 1 /* imgui descriptor */;
+    srv_heap_desc.NumDescriptors = _COUNT_TEX + 6 /* GpuWaves descriptors */ + 1 /* imgui descriptor */;
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -754,6 +755,13 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     srv_desc.Texture2DArray.ArraySize = tree_tex->GetDesc().DepthOrArraySize;
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
     render_ctx->device->CreateShaderResourceView(tree_tex, &srv_desc, descriptor_cpu_handle);
+
+    // Create GpuWaves descriptors
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_waves = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_waves.ptr += _COUNT_TEX * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_waves = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    hgpu_waves.ptr += _COUNT_TEX * render_ctx->cbv_srv_uav_descriptor_size;
+    GpuWaves_BuildDescriptors(wave, hcpu_waves, hgpu_waves, render_ctx->cbv_srv_uav_descriptor_size);
 
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
@@ -1081,21 +1089,7 @@ create_pso (
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
-    float dt = gt->delta_time;
 
-    if (GetAsyncKeyState(VK_LEFT) & 0x8000)
-        scene_ctx->sun_theta -= 1.0f * dt;
-
-    if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
-        scene_ctx->sun_theta += 1.0f * dt;
-
-    if (GetAsyncKeyState(VK_UP) & 0x8000)
-        scene_ctx->sun_phi -= 1.0f * dt;
-
-    if (GetAsyncKeyState(VK_DOWN) & 0x8000)
-        scene_ctx->sun_phi += 1.0f * dt;
-
-    scene_ctx->sun_phi = CLAMP_VALUE(scene_ctx->sun_phi, 0.1f, XM_PIDIV2);
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
@@ -1255,7 +1249,7 @@ animate_material (Material * mat, GameTimer * timer) {
     mat->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
-update_waves_vb (Waves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
+update_waves_vb (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
     float total_time = Timer_GetTotalTime(timer);
     float delta_time = timer->delta_time;
 
@@ -1280,13 +1274,6 @@ update_waves_vb (Waves * waves, D3DRenderContext * render_ctx, GameTimer * timer
     // Update the wave vertex buffer with the new solution.
     UINT frame_index = render_ctx->frame_index;
     uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
-
-    //D3D12_RANGE mem_range = {};
-    //mem_range.Begin = 0;
-    //mem_range.End = 0;
-    //CHECK_AND_FAIL(
-    //    render_ctx->frame_resources[frame_index].waves_vb->Map(0, &mem_range, reinterpret_cast<void**>(&wave_ptr))
-    //);
 
     UINT v_size = (UINT64)sizeof(Vertex);
     for (int i = 0; i < waves->nvtx; ++i) {
@@ -1809,7 +1796,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     uint32_t const N_VTX = nrow * ncols;
     size_t wave_size = Waves_CalculateRequiredSize(nrow, ncols);
     BYTE * wave_memory = (BYTE *)::malloc(wave_size);
-    Waves * waves = Waves_Init(wave_memory, nrow, ncols, 1.0f, 0.03f, 4.0f, 0.2f);
+    GpuWaves * waves = Waves_Init(wave_memory, nrow, ncols, 1.0f, 0.03f, 4.0f, 0.2f);
 
     // Query Adapter (PhysicalDevice)
     IDXGIFactory * dxgi_factory = nullptr;
@@ -2243,10 +2230,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // calculate imgui cpu & gpu handles on location on srv_heap
     D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * _COUNT_TEX);
+    imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */));
 
     D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * _COUNT_TEX);
+    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */));
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);

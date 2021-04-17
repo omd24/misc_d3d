@@ -188,6 +188,10 @@ struct RenderItem {
 
     Material * mat;
     MeshGeometry * geometry;
+
+    // Stuff for GPU waves render_items
+    XMFLOAT2 displacement_map_texel_size;
+    float grid_spatial_step;
 };
 
 static XMFLOAT4X4
