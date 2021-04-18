@@ -117,7 +117,7 @@ struct SceneContext {
 };
 
 GameTimer global_timer;
-bool global_running;
+bool global_paused;
 bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
@@ -1832,10 +1832,13 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
 
     case WM_ACTIVATE: {
-        if (LOWORD(wParam) == WA_INACTIVE)
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            global_paused = true;
             Timer_Stop(&global_timer);
-        else
+        } else {
+            global_paused = false;
             Timer_Start(&global_timer);
+        }
     } break;
 
     case WM_LBUTTONDOWN:
@@ -1857,9 +1860,13 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         global_scene_ctx.width = LOWORD(lParam);
         global_scene_ctx.height = HIWORD(lParam);
         if (_render_ctx) {
-            if (wParam == SIZE_MAXIMIZED) {
+            if (wParam == SIZE_MINIMIZED) {
+                global_paused = true;
+            } else if (wParam == SIZE_MAXIMIZED) {
+                global_paused = false;
                 d3d_resize(_render_ctx);
             } else if (wParam == SIZE_RESTORED) {
+                // TODO(omid): handle restore from minimize/maximize 
                 if (global_resizing) {
                     // don't do nothing until resizing finished
                 } else {
@@ -1870,19 +1877,20 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     } break;
     // WM_EXITSIZEMOVE is sent when the user grabs the resize bars.
     case WM_ENTERSIZEMOVE: {
+        global_paused = true;
         global_resizing  = true;
         Timer_Stop(&global_timer);
     } break;
     // WM_EXITSIZEMOVE is sent when the user releases the resize bars.
     // Here we reset everything based on the new window dimensions.
     case WM_EXITSIZEMOVE: {
+        global_paused = false;
         global_resizing  = false;
         Timer_Start(&global_timer);
         d3d_resize(_render_ctx);
     } break;
     case WM_DESTROY: {
-        global_running = false;
-        //PostQuitMessage(0);
+        PostQuitMessage(0);
     } break;
     // Catch this message so to prevent the window from becoming too small.
     case WM_GETMINMAXINFO:
@@ -2479,66 +2487,71 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         // ========================================================================================================
 #pragma region Main_Loop
-    global_running = true;
+    global_paused = false;
     global_resizing = false;
     global_mouse_active = true;
     bool beginwnd, sliderf, coloredit;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
-    while (global_running) {
-        MSG msg = {};
-        while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
+    MSG msg = {};
+    while (msg.message != WM_QUIT) {
+        if (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
-        }
-
+        } else {
 #pragma region Imgui window
-        ImGui_ImplDX12_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-        ImGui::NewFrame();
-        ImGui::Begin("Settings", ptr_open, window_flags);
-        beginwnd = ImGui::IsItemActive();
+            ImGui_ImplDX12_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            ImGui::NewFrame();
+            ImGui::Begin("Settings", ptr_open, window_flags);
+            beginwnd = ImGui::IsItemActive();
 
-        ImGui::SliderFloat(
-            "Fog Distance",
-            &render_ctx->main_pass_constants.fog_start,
-            5.0f,
-            150.0f
-        );
-        sliderf = ImGui::IsItemActive();
+            ImGui::SliderFloat(
+                "Fog Distance",
+                &render_ctx->main_pass_constants.fog_start,
+                5.0f,
+                150.0f
+            );
+            sliderf = ImGui::IsItemActive();
 
-        ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
-        coloredit = ImGui::IsItemActive();
+            ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
+            coloredit = ImGui::IsItemActive();
 
-        static int i_curr = 0;
-        ImGui::Combo("Box Material", &i_curr, "   Wood\0   Wire-fenced\0\0");
+            static int i_curr = 0;
+            ImGui::Combo("Box Material", &i_curr, "   Wood\0   Wire-fenced\0\0");
 
-        ImGui::Text("\n\n");
-        ImGui::Separator();
-        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            ImGui::Text("\n\n");
+            ImGui::Separator();
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
-        ImGui::End();
-        ImGui::Render();
+            ImGui::End();
+            ImGui::Render();
 #pragma endregion
 
-        Timer_Tick(&global_timer);
-        handle_keyboard_input(&global_scene_ctx, &global_timer);
-        update_camera(&global_scene_ctx);
+            Timer_Tick(&global_timer);
 
-        animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
-        update_obj_cbuffers(render_ctx);
-        update_mat_cbuffers(render_ctx);
-        update_pass_cbuffers(render_ctx, &global_timer);
+            if (!global_paused) {
+                handle_keyboard_input(&global_scene_ctx, &global_timer);
+                update_camera(&global_scene_ctx);
 
-        CHECK_AND_FAIL(draw_main(render_ctx, waves));
-        CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
+                animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
+                update_obj_cbuffers(render_ctx);
+                update_mat_cbuffers(render_ctx);
+                update_pass_cbuffers(render_ctx, &global_timer);
 
-        // End of the loop updates
-        if (0 == i_curr)
-            render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-        else if (1 == i_curr)
-            render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
-        global_mouse_active = !(beginwnd || sliderf || coloredit);
+                CHECK_AND_FAIL(draw_main(render_ctx, waves));
+                CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
+
+                // End of the loop updates
+                if (0 == i_curr)
+                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
+                else if (1 == i_curr)
+                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
+                global_mouse_active = !(beginwnd || sliderf || coloredit);
+            } else {
+                Sleep(100);
+            }
+        }
     }
 #pragma endregion
 

@@ -24,10 +24,10 @@ void update_wave_cs (int3 dispatch_threadid : SV_DispatchThreadID) {
         global_wave_constant0 * global_prev_sol_input[int2(x, y)].r +
         global_wave_constant1 * global_curr_sol_input[int2(x, y)].r +
         global_wave_constant2 * (
-        global_curr_sol_input[int2(x, y + 1)].r +
-        global_curr_sol_input[int2(x, y - 1)].r +
-        global_curr_sol_input[int2(x + 1, y)].r +
-        global_curr_sol_input[int2(x - 1, y)].r);
+            global_curr_sol_input[int2(x, y + 1)].r +
+            global_curr_sol_input[int2(x, y - 1)].r +
+            global_curr_sol_input[int2(x + 1, y)].r +
+            global_curr_sol_input[int2(x - 1, y)].r);
 }
 
 [numthreads(1, 1, 1)]

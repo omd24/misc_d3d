@@ -181,9 +181,9 @@ GpuWaves_BuildDescriptors (
     wave->device->CreateShaderResourceView(wave->next_sol, &srv_desc, hcpu_descriptor);
 
     hcpu_descriptor.ptr += descriptor_size;
-    wave->device->CreateUnorderedAccessView(wave->next_sol, NULL, &uav_desc, hcpu_descriptor);
+    wave->device->CreateUnorderedAccessView(wave->prev_sol, NULL, &uav_desc, hcpu_descriptor);
     hcpu_descriptor.ptr += descriptor_size;
-    wave->device->CreateUnorderedAccessView(wave->next_sol, NULL, &uav_desc, hcpu_descriptor);
+    wave->device->CreateUnorderedAccessView(wave->curr_sol, NULL, &uav_desc, hcpu_descriptor);
     hcpu_descriptor.ptr += descriptor_size;
     wave->device->CreateUnorderedAccessView(wave->next_sol, NULL, &uav_desc, hcpu_descriptor);
 
@@ -307,6 +307,11 @@ GpuWaves_Disturb (
     barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
+    cmdlist->ResourceBarrier(1, &barrier1);
+    // One thread group kicks off one thread, which displaces the height of one
+    // vertex and its neighbors.
+    cmdlist->Dispatch(1, 1, 1);
+
     D3D12_RESOURCE_BARRIER barrier2 = {};
     barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -314,11 +319,6 @@ GpuWaves_Disturb (
     barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
     barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    cmdlist->ResourceBarrier(1, &barrier1);
-    // One thread group kicks off one thread, which displaces the height of one
-    // vertex and its neighbors.
-    cmdlist->Dispatch(1, 1, 1);
 
     cmdlist->ResourceBarrier(1, &barrier2);
 }
