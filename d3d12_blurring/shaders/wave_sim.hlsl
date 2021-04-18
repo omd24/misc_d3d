@@ -38,7 +38,7 @@ void disturb_wave_cs (
     int x = global_disturb_index.x;
     int y = global_disturb_index.y;
     
-    float half_mag = 0.5 * global_disturb_magnitude;
+    float half_mag = 0.5f * global_disturb_magnitude;
     
     // buffer is RW so operator += is well defined
     global_output[int2(x, y)] += global_disturb_magnitude;

@@ -397,7 +397,7 @@ create_land_geometry (D3DRenderContext * render_ctx) {
     uint16_t * indices = (uint16_t *)::malloc(sizeof(uint16_t) * nidx);
     GeomVertex * grid = (GeomVertex *)::malloc(sizeof(GeomVertex) * nvtx);
 
-    create_grid(320.0f, 320.0f, 50, 50, grid, indices);
+    create_grid16(320.0f, 320.0f, 50, 50, grid, indices);
 
     // Extract the vertex elements we are interested and apply the height function to
     // each vertex.  In addition, color the vertices based on their height so we have
@@ -446,37 +446,26 @@ create_land_geometry (D3DRenderContext * render_ctx) {
 }
 static void
 create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * render_ctx) {
+    _Unreferenced_parameter_(ntri);
     uint32_t _WAVE_VTX_CNT = ncol * nrow;
-    _ASSERT_EXPR(_WAVE_VTX_CNT < 0x000fffff, "Invalid vertex count");
-    Vertex * vertices = (Vertex *)::malloc(sizeof(Vertex) * _WAVE_VTX_CNT);
-    uint32_t _idx_cnt = 3 * ntri;
-    uint32_t * indices = (uint32_t *)::malloc(_idx_cnt * sizeof(uint32_t)); // 3 indices per face
+    uint32_t _idx_cnt = (nrow - 1) * (ncol - 1) * 6;    // every 6 vertices form a quad
+    Vertex * vertices = (Vertex *)::calloc(_WAVE_VTX_CNT, sizeof(Vertex));
+    uint32_t * indices = (uint32_t *)::calloc(_idx_cnt, sizeof(uint32_t));
 
-    // Iterate over each quad.
-    int m = nrow;
-    int n = ncol;
-    int k = 0;
-    for (int i = 0; i < m - 1; ++i) {
-        for (int j = 0; j < n - 1; ++j) {
-            indices[k] = (i * n + j);
-            indices[k + 1] = (i * n + j + 1);       // TODO(omid): address this warning 
-            indices[k + 2] = ((i + 1) * n + j);
+    GeomVertex * grid = (GeomVertex *)::calloc(_WAVE_VTX_CNT, sizeof(GeomVertex));
 
-            indices[k + 3] = ((i + 1) * n + j);
-            indices[k + 4] = (i * n + j + 1);
-            indices[k + 5] = ((i + 1) * n + j + 1);
+    create_grid32(256.0f, 256.0f, nrow, ncol, grid, indices);
 
-            k += 6; // next quad
-        }
+    for (uint32_t i = 0; i < _WAVE_VTX_CNT; i++) {
+        vertices[i].position = grid[i].Position;
+        vertices[i].normal = grid[i].Normal;
+        vertices[i].texc = grid[i].TexC;
     }
 
     UINT vb_byte_size = _WAVE_VTX_CNT * sizeof(Vertex);
     UINT ib_byte_size = _idx_cnt * sizeof(uint32_t);
 
     // -- Fill out render_ctx geom (output)
-
-    //D3DCreateBlob(vb_byte_size, &render_ctx->water_geom.vb_cpu);
-    //CopyMemory(render_ctx->water_geom.vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
     CHECK_AND_FAIL(D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_cpu));
     if (vertices)
@@ -501,6 +490,7 @@ create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * rende
     render_ctx->geom[GEOM_WATER].submesh_names[0] = "water";
     render_ctx->geom[GEOM_WATER].submesh_geoms[0] = submesh;
 
+    ::free(grid);
     ::free(indices);
     ::free(vertices);
 }
@@ -1525,18 +1515,13 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
     // Populate command list
 
     // -- reset cmd_allocator and cmd_list
-
-    // Command list allocators can only be reset when the associated 
-    // command lists have finished execution on the GPU; apps should use 
-    // fences to determine GPU execution progress.
     render_ctx->frame_resources[frame_index].cmd_list_alloc->Reset();
 
-    // However, when ExecuteCommandList() is called on a particular command 
+    // When ExecuteCommandList() is called on a particular command 
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
     ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
     CHECK_AND_FAIL(ret);
-
 
     ID3D12DescriptorHeap* descriptor_heaps [] = {render_ctx->srv_heap};
     render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
@@ -1845,11 +1830,14 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     LRESULT ret = 0;
     switch (uMsg) {
-        /* WM_PAINT is not handled for now ...
-        case WM_PAINT: {
 
-        } break;
-        */
+    case WM_ACTIVATE: {
+        if (LOWORD(wParam) == WA_INACTIVE)
+            Timer_Stop(&global_timer);
+        else
+            Timer_Start(&global_timer);
+    } break;
+
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN: {
@@ -2119,7 +2107,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     uint32_t const ncols = 256;
     uint32_t const N_VTX = nrow * ncols;
     BYTE * wave_memory = (BYTE *)::malloc(sizeof(GpuWaves));
-    GpuWaves * waves = GpuWaves_Init(wave_memory, render_ctx->direct_cmd_list, render_ctx->device, nrow, ncols, 1.0f, 0.03f, 4.0f, 0.2f);
+    GpuWaves * waves = GpuWaves_Init(wave_memory, render_ctx->direct_cmd_list, render_ctx->device, nrow, ncols, 0.25f, 0.03f, 2.0f, 0.2f);
 
     create_descriptor_heaps(render_ctx, waves);
 

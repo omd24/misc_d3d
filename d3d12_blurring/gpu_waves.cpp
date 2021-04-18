@@ -209,7 +209,7 @@ GpuWaves_Update (
     ID3D12PipelineState * pso,
     float dt
 ) {
-    static float t = 0;
+    static float t = 0.0f;
 
     // Accumulate time.
     t += dt;

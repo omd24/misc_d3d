@@ -111,9 +111,6 @@ struct Material {
     int normal_srvheap_index;
 
     // Dirty flag indicating the material has changed and we need to update the constant buffer.
-    // Because we have a material constant buffer for each FrameResource, we have to apply the
-    // update to each FrameResource.  Thus, when we modify a material we should set 
-    // n_frames_dirty = NUM_QUEUING_FRAMES so that each frame resource gets the update.
     int n_frames_dirty;
 
     // Material constant buffer data used for shading.
@@ -150,11 +147,6 @@ struct FrameResource {
     ID3D12Resource * obj_cb;
     ObjectConstants obj_cb_data;
     uint8_t * obj_cb_data_ptr;
-
-    // Not used for Gpu waves
-    /*ID3D12Resource * waves_vb;
-    Vertex waves_vb_data;
-    uint8_t * waves_vb_data_ptr;*/
 
     // Fence value to mark commands up to this fence point.  This lets us
     // check if these frame resources are still in use by the GPU.
@@ -865,7 +857,7 @@ create_cylinder (float bottom_radius, float top_radius, float height, GeomVertex
 
 }
 static void
-create_grid (float width, float depth, UINT32 m, UINT32 n, GeomVertex out_vtx [], uint16_t out_idx []) {
+create_grid16 (float width, float depth, UINT32 m, UINT32 n, GeomVertex out_vtx [], uint16_t out_idx []) {
 
     // -- Create the vertices.
 
@@ -900,6 +892,54 @@ create_grid (float width, float depth, UINT32 m, UINT32 n, GeomVertex out_vtx []
     UINT16 nn = (UINT16)n; // cast to avoid compiler warnings
     for (UINT16 i = 0; i < m - 1; ++i) {
         for (UINT16 j = 0; j < n - 1; ++j) {
+            out_idx[k] = i * nn + j;
+            out_idx[k + 1] = i * nn + j + 1;
+            out_idx[k + 2] = (i + 1) * nn + j;
+
+            out_idx[k + 3] = (i + 1) * nn + j;
+            out_idx[k + 4] = i * nn + j + 1;
+            out_idx[k + 5] = (i + 1) * nn + j + 1;
+
+            k += 6; // next quad
+        }
+    }
+}
+static void
+create_grid32 (float width, float depth, UINT32 m, UINT32 n, GeomVertex out_vtx [], uint32_t out_idx []) {
+
+    // -- Create the vertices.
+
+    float half_width = 0.5f * width;
+    float half_depth = 0.5f * depth;
+
+    float dx = width / (n - 1);
+    float dz = depth / (m - 1);
+
+    float du = 1.0f / (n - 1);
+    float dv = 1.0f / (m - 1);
+
+    for (UINT32 i = 0; i < m; ++i) {
+        float z = half_depth - i * dz;
+        for (UINT32 j = 0; j < n; ++j) {
+            float x = -half_width + j * dx;
+
+            out_vtx[i * n + j].Position = XMFLOAT3(x, 0.0f, z);
+            out_vtx[i * n + j].Normal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+            out_vtx[i * n + j].TangentU = XMFLOAT3(1.0f, 0.0f, 0.0f);
+
+            // Stretch texture over grid.
+            out_vtx[i * n + j].TexC.x = j * du;
+            out_vtx[i * n + j].TexC.y = i * dv;
+        }
+    }
+
+    // -- Create the indices.
+
+    // Iterate over each quad and compute indices.
+    UINT32 k = 0;
+    UINT32 nn = n;
+    for (UINT i = 0; i < m - 1; ++i) {
+        for (UINT j = 0; j < n - 1; ++j) {
             out_idx[k] = i * nn + j;
             out_idx[k + 1] = i * nn + j + 1;
             out_idx[k + 2] = (i + 1) * nn + j;
