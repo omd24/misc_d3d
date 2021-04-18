@@ -43,6 +43,8 @@ enum RENDER_LAYER : int {
     LAYER_ALPHATESTED = 2,
     LAYER_ALPHATESTED_TREESPRITES = 3,
     LAYER_GPU_WAVES = 4,
+    LAYER_GPU_WAVES_DISTURB = 5,
+    LAYER_GPU_WAVES_UPDATE = 6,
 
     _COUNT_RENDER_LAYER
 };
@@ -142,6 +144,7 @@ struct D3DRenderContext {
     IDXGISwapChain *                swapchain;
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
+    ID3D12RootSignature *           root_signature_waves;
     ID3D12PipelineState *           psos[_COUNT_RENDER_LAYER];
 
     // Command objects
@@ -591,6 +594,8 @@ create_render_items (
     all_ritems->ritems[RITEM_WATER].base_vertex_loc = water_geom->submesh_geoms[0].base_vertex_location;
     all_ritems->ritems[RITEM_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
     all_ritems->ritems[RITEM_WATER].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_WATER].grid_spatial_step = 1;
+    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size = {1.0f, 1.0f};
     all_ritems->ritems[RITEM_WATER].initialized = true;
     all_ritems->size++;
     transparent_ritems->ritems[0] = all_ritems->ritems[RITEM_WATER];
@@ -608,6 +613,8 @@ create_render_items (
     all_ritems->ritems[RITEM_GRID].base_vertex_loc = grid_geom->submesh_geoms[0].base_vertex_location;
     all_ritems->ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
     all_ritems->ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_GRID].grid_spatial_step = 1;
+    all_ritems->ritems[RITEM_GRID].displacement_map_texel_size = {1.0f, 1.0f};
     all_ritems->ritems[RITEM_GRID].initialized = true;
     all_ritems->size++;
     opaque_ritems->ritems[0] = all_ritems->ritems[RITEM_GRID];
@@ -625,6 +632,8 @@ create_render_items (
     all_ritems->ritems[RITEM_BOX].base_vertex_loc = box_geom->submesh_geoms[0].base_vertex_location;
     all_ritems->ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
     all_ritems->ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_BOX].grid_spatial_step = 1;
+    all_ritems->ritems[RITEM_BOX].displacement_map_texel_size = {1.0f, 1.0f};
     all_ritems->ritems[RITEM_BOX].initialized = true;
     all_ritems->size++;
     alphatested_ritems->ritems[0] = all_ritems->ritems[RITEM_BOX];
@@ -641,6 +650,8 @@ create_render_items (
     all_ritems->ritems[RITEM_TREESPRITE].base_vertex_loc = treesprites_geom->submesh_geoms[0].base_vertex_location;
     all_ritems->ritems[RITEM_TREESPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
     all_ritems->ritems[RITEM_TREESPRITE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    all_ritems->ritems[RITEM_TREESPRITE].grid_spatial_step = 1;
+    all_ritems->ritems[RITEM_TREESPRITE].displacement_map_texel_size = {1.0f, 1.0f};
     all_ritems->ritems[RITEM_TREESPRITE].initialized = true;
     all_ritems->size++;
     alphatested_treesprites_ritems->ritems[0] = all_ritems->ritems[RITEM_TREESPRITE];
@@ -933,11 +944,14 @@ static void
 create_pso (
     D3DRenderContext * render_ctx,
     IDxcBlob * vertex_shader_code_std,
+    IDxcBlob * vertex_shader_code_wave,
     IDxcBlob * pixel_shader_code_opaque,
     IDxcBlob * pixel_shader_code_alphatested,
     IDxcBlob * vertex_shader_code_tree,
     IDxcBlob * geo_shader_code_tree,
-    IDxcBlob * pixel_shader_code_tree
+    IDxcBlob * pixel_shader_code_tree,
+    IDxcBlob * compute_shader_code_update_wave,
+    IDxcBlob * compute_shader_code_disturb_wave
 ) {
     // -- Create vertex-input-layout Elements
 
@@ -1153,6 +1167,8 @@ update_obj_cbuffers (D3DRenderContext * render_ctx) {
             ObjectConstants obj_cbuffer = {};
             XMStoreFloat4x4(&obj_cbuffer.world, XMMatrixTranspose(world));
             XMStoreFloat4x4(&obj_cbuffer.tex_transform, XMMatrixTranspose(tex_transform));
+            obj_cbuffer.displacement_texel_size = render_ctx->all_ritems.ritems[i].displacement_map_texel_size;
+            obj_cbuffer.grid_spatial_step = render_ctx->all_ritems.ritems[i].grid_spatial_step;
 
             uint8_t * obj_ptr = render_ctx->frame_resources[frame_index].obj_cb_data_ptr + ((UINT64)obj_index * cbuffer_size);
             memcpy(obj_ptr, &obj_cbuffer, cbuffer_size);
@@ -1249,7 +1265,7 @@ animate_material (Material * mat, GameTimer * timer) {
     mat->n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static void
-update_waves_vb (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
+update_waves_gpu (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
     float total_time = Timer_GetTotalTime(timer);
     float delta_time = timer->delta_time;
 
@@ -1261,39 +1277,66 @@ update_waves_vb (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * ti
         int i = rand_int(4, waves->nrow - 5);
         int j = rand_int(4, waves->ncol - 5);
 
-        float r = rand_float(0.2f, 0.5f);
+        float r = rand_float(1.0f, 2.0f);
 
-        Waves_Disturb(waves, i, j, r);
+        GpuWaves_Disturb(
+            waves, render_ctx->direct_cmd_list, render_ctx->root_signature_waves,
+            render_ctx->psos[LAYER_GPU_WAVES_DISTURB], i, j, r
+        );
     }
 
     // Update the wave simulation.
-    XMFLOAT3 * temp = (XMFLOAT3 *)::malloc(sizeof(XMFLOAT3) * waves->nvtx);
-    Waves_Update(waves, delta_time, temp);
-    ::free(temp);
-
-    // Update the wave vertex buffer with the new solution.
-    UINT frame_index = render_ctx->frame_index;
-    uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
-
-    UINT v_size = (UINT64)sizeof(Vertex);
-    for (int i = 0; i < waves->nvtx; ++i) {
-        Vertex v;
-
-        v.position = Waves_GetPosition(waves, i);
-        v.normal = waves->normal[i];
-
-            // Derive tex-coords from position by 
-        // mapping [-w/2,w/2] --> [0,1]
-        v.texc.x = 0.5f + v.position.x / waves->width;
-        v.texc.y = 0.5f - v.position.z / waves->depth;
-
-        ::memcpy(wave_ptr + (UINT64)i * v_size, &v, v_size);
-    }
-    // NOTE(omid): We did the upload_buffer mapping to data pointer (when creating the upload_buffer)
-
-    // Set the dynamic VB of the wave renderitem to the current frame VB.
-    render_ctx->all_ritems.ritems[RITEM_WATER].geometry->vb_gpu = render_ctx->frame_resources[frame_index].waves_vb;
+    GpuWaves_Update(
+        waves, render_ctx->direct_cmd_list, render_ctx->root_signature_waves,
+        render_ctx->psos[LAYER_GPU_WAVES_UPDATE], delta_time
+    );
 }
+//static void
+//update_waves_vb (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
+//    float total_time = Timer_GetTotalTime(timer);
+//    float delta_time = timer->delta_time;
+//
+//    // Every quarter second, generate a random wave.
+//    static float t_base = 0.0f;
+//    if ((total_time - t_base) >= 0.25f) {
+//        t_base += 0.25f;
+//
+//        int i = rand_int(4, waves->nrow - 5);
+//        int j = rand_int(4, waves->ncol - 5);
+//
+//        float r = rand_float(0.2f, 0.5f);
+//
+//        Waves_Disturb(waves, i, j, r);
+//    }
+//
+//    // Update the wave simulation.
+//    XMFLOAT3 * temp = (XMFLOAT3 *)::malloc(sizeof(XMFLOAT3) * waves->nvtx);
+//    Waves_Update(waves, delta_time, temp);
+//    ::free(temp);
+//
+//    // Update the wave vertex buffer with the new solution.
+//    UINT frame_index = render_ctx->frame_index;
+//    uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
+//
+//    UINT v_size = (UINT64)sizeof(Vertex);
+//    for (int i = 0; i < waves->nvtx; ++i) {
+//        Vertex v;
+//
+//        v.position = Waves_GetPosition(waves, i);
+//        v.normal = waves->normal[i];
+//
+//            // Derive tex-coords from position by 
+//        // mapping [-w/2,w/2] --> [0,1]
+//        v.texc.x = 0.5f + v.position.x / waves->width;
+//        v.texc.y = 0.5f - v.position.z / waves->depth;
+//
+//        ::memcpy(wave_ptr + (UINT64)i * v_size, &v, v_size);
+//    }
+//    // NOTE(omid): We did the upload_buffer mapping to data pointer (when creating the upload_buffer)
+//
+//    // Set the dynamic VB of the wave renderitem to the current frame VB.
+//    render_ctx->all_ritems.ritems[RITEM_WATER].geometry->vb_gpu = render_ctx->frame_resources[frame_index].waves_vb;
+//}
 static HRESULT
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
 
@@ -2066,16 +2109,21 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     wchar_t const * shaders_path = L"./shaders/default.hlsl";
     wchar_t const * tree_shader_path = L"./shaders/tree_sprite.hlsl";
+    wchar_t const * wavesim_shader_path = L"./shaders/wave_sim.hlsl";
     uint32_t code_page = CP_UTF8;
     IDxcBlobEncoding * shader_blob = nullptr;
     IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need a different blob for trees
+    IDxcBlobEncoding * shader_blob_waves = nullptr;   // TODO(omid): do we need a different blob for trees
     IDxcOperationResult * dxc_res = nullptr;
     IDxcBlob * vertex_shader_code = nullptr;
+    IDxcBlob * vertex_shader_code_wave = nullptr;
     IDxcBlob * pixel_shader_code_opaque = nullptr;
     IDxcBlob * pixel_shader_code_alphatest = nullptr;
     IDxcBlob * vertex_shader_code_tree = nullptr;
     IDxcBlob * geo_shader_code_tree = nullptr;
     IDxcBlob * pixel_shader_code_tree = nullptr;
+    IDxcBlob * compute_shader_code_update_wave = nullptr;
+    IDxcBlob * compute_shader_code_disturb_wave = nullptr;
     {   // standard shaders
         hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
         if (shader_blob) {
@@ -2090,11 +2138,18 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             defines_alphatest[0].Value = L"1";
             defines_alphatest[1].Name = L"ALPHA_TEST";
             defines_alphatest[1].Value = L"1";
+            int const n_define_wave = 1;
+            DxcDefine defines_wave[n_define_wave] = {};
+            defines_wave[0].Name = L"DISPLACEMENT_MAP";
+            defines_wave[0].Value = L"1";
 
             dxc_lib->CreateIncludeHandler(&include_handler);
             hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&vertex_shader_code);
+            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, defines_wave, n_define_wave, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&vertex_shader_code_wave);
             hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&pixel_shader_code_opaque);
@@ -2148,12 +2203,37 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             }
         }
     }
+    {   // wave compute shaders
+        hr = dxc_lib->CreateBlobFromFile(wavesim_shader_path, &code_page, &shader_blob_waves);
+        if (shader_blob_waves) {
+            hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"update_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&compute_shader_code_update_wave);
+            hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"disturb_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&compute_shader_code_disturb_wave);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+        }
+    }
     _ASSERT_EXPR(vertex_shader_code, "invalid shader");
+    _ASSERT_EXPR(vertex_shader_code_wave, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_alphatest, "invalid shader");
     _ASSERT_EXPR(vertex_shader_code_tree, "invalid shader");
     _ASSERT_EXPR(geo_shader_code_tree, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_tree, "invalid shader");
+    _ASSERT_EXPR(compute_shader_code_update_wave, "invalid shader");
+    _ASSERT_EXPR(compute_shader_code_disturb_wave, "invalid shader");
 
 #pragma endregion
 
@@ -2161,11 +2241,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     create_pso(
         render_ctx,
         vertex_shader_code,
+        vertex_shader_code_wave,
         pixel_shader_code_opaque,
         pixel_shader_code_alphatest,
         vertex_shader_code_tree,
         geo_shader_code_tree,
-        pixel_shader_code_tree
+        pixel_shader_code_tree,
+        compute_shader_code_update_wave,
+        compute_shader_code_disturb_wave
     );
 #pragma endregion PSO_Creation
 

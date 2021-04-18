@@ -31,7 +31,10 @@ struct Light {
 struct ObjectConstants {
     XMFLOAT4X4 world;
     XMFLOAT4X4 tex_transform;
-    float padding[32];  // Padding so the constant buffer is 256-byte aligned
+    XMFLOAT2 displacement_texel_size;
+    float grid_spatial_step;
+    float pad;
+    float padding[28];  // Padding so the constant buffer is 256-byte aligned
 };
 static_assert(256 == sizeof(ObjectConstants), "Constant buffer size must be 256b aligned");
 // -- per pass constants

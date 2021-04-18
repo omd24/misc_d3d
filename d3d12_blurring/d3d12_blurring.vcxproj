@@ -150,7 +150,7 @@
     <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="d3d_blurring.cpp" />
-    <ClCompile Include="waves.cpp" />
+    <ClCompile Include="gpu_waves.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="headers\common.h" />
@@ -158,7 +158,7 @@
     <ClInclude Include="headers\game_timer.h" />
     <ClInclude Include="headers\mesh_geometry.h" />
     <ClInclude Include="headers\utils.h" />
-    <ClInclude Include="waves.h" />
+    <ClInclude Include="gpu_waves.h" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\default.hlsl">

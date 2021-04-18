@@ -21,7 +21,7 @@
     <ClCompile Include="d3d_blurring.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="waves.cpp">
+    <ClCompile Include="gpu_waves.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\externals\imgui\imgui.cpp">
@@ -59,7 +59,7 @@
     <ClInclude Include="headers\utils.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="waves.h">
+    <ClInclude Include="gpu_waves.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

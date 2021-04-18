@@ -11,6 +11,8 @@
 #include "light_utils.hlsl"
 
 Texture2D global_diffuse_map : register(t0);
+Texture2D global_displacement_map : register(t1);
+
 SamplerState global_sam_point_wrap : register(s0);
 SamplerState global_sam_point_clamp : register(s1);
 SamplerState global_sam_linear_wrap : register(s2);
@@ -21,6 +23,9 @@ SamplerState global_sam_anisotropic_clamp : register(s5);
 cbuffer PerObjectConstantBuffer : register(b0) {
     float4x4 global_world;
     float4x4 global_tex_transform;
+    float2  global_displacement_map_texel_size;
+    float   global_grid_spatial_step;
+    float   cb_per_obj_pad1;
 }
 cbuffer PerPassConstantBuffer : register(b1) {
     float4x4 global_view;
@@ -74,6 +79,20 @@ VertexShaderOutput
 VertexShader_Main (VertexShaderInput vin) {
     VertexShaderOutput result = (VertexShaderOutput) 0.0f;
 
+#ifdef DISPLACEMENT_MAP
+    // sampler the displacement map using non-transformed [0,1]^2 texture-coords
+    vin.pos_local.y += global_displacement_map.SampleLevel(global_sam_linear_wrap, vin.texc, 1.0f).r;
+    
+    // estimate normal using finite difference
+    float du = global_displacement_map_texel_size.x;
+    float dv = global_displacement_map_texel_size.y;
+    float l = global_displacement_map.SampleLevel(global_sam_point_clamp, vin.texc - float2(du, 0.0f), 0.0f).r;
+    float r = global_displacement_map.SampleLevel(global_sam_point_clamp, vin.texc + float2(du, 0.0f), 0.0f).r;
+    float t = global_displacement_map.SampleLevel(global_sam_point_clamp, vin.texc - float2(0.0f, dv), 0.0f).r;
+    float b = global_displacement_map.SampleLevel(global_sam_point_clamp, vin.texc + float2(0.0f, dv), 0.0f).r;
+    vin.normal_local = normalize(float3(-r + l, 2.0f * global_grid_spatial_step, b - t));
+#endif
+    
     // transform to world space
     float4 pos_world = mul(float4(vin.pos_local, 1.0f), global_world);
     result.pos_world = pos_world.xyz;
