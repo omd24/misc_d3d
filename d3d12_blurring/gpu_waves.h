@@ -53,7 +53,7 @@ GpuWaves_Disturb (
     ID3D12GraphicsCommandList * cmdlist,
     ID3D12RootSignature * root_sig,
     ID3D12PipelineState * pso,
-    int i, int j, float magnitude
+    UINT i, UINT j, float magnitude
 );
 void
 GpuWaves_Deinit (GpuWaves * wave);

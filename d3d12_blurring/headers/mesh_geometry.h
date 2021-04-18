@@ -53,7 +53,7 @@ struct MeshGeometry {
     SubmeshGeometry submesh_geoms [MAX_SUBMESH_COUNT];
 };
 
-D3D12_VERTEX_BUFFER_VIEW
+inline D3D12_VERTEX_BUFFER_VIEW
 Mesh_GetVertexBufferView (MeshGeometry * mesh) {
     D3D12_VERTEX_BUFFER_VIEW vbv;
     vbv.BufferLocation = mesh->vb_gpu->GetGPUVirtualAddress();
@@ -63,7 +63,7 @@ Mesh_GetVertexBufferView (MeshGeometry * mesh) {
     return vbv;
 }
 
-D3D12_INDEX_BUFFER_VIEW
+inline D3D12_INDEX_BUFFER_VIEW
 Mesh_GetIndexBufferView (MeshGeometry * mesh) {
     D3D12_INDEX_BUFFER_VIEW ibv;
     ibv.BufferLocation = mesh->ib_gpu->GetGPUVirtualAddress();
@@ -74,7 +74,7 @@ Mesh_GetIndexBufferView (MeshGeometry * mesh) {
 }
 
 // We can free this memory after we finish upload to the GPU.
-void
+inline void
 Mesh_Dispose (MeshGeometry * mesh) {
     mesh->vb_cpu->Release();
     mesh->ib_cpu->Release();

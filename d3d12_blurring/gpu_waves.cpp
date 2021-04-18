@@ -40,23 +40,23 @@ GpuWaves_Init (BYTE * memory, ID3D12GraphicsCommandList* cmdlist, ID3D12Device *
     tex_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     tex_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    D3D12_HEAP_PROPERTIES heap_props = {};
-    heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
-    heap_props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-    heap_props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-    heap_props.CreationNodeMask = 1;
-    heap_props.VisibleNodeMask = 1;
+    D3D12_HEAP_PROPERTIES heap_props_default = {};
+    heap_props_default.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heap_props_default.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heap_props_default.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heap_props_default.CreationNodeMask = 1;
+    heap_props_default.VisibleNodeMask = 1;
 
     ret->device->CreateCommittedResource(
-        &heap_props, D3D12_HEAP_FLAG_NONE,
+        &heap_props_default, D3D12_HEAP_FLAG_NONE,
         &tex_desc, D3D12_RESOURCE_STATE_COMMON, NULL, IID_PPV_ARGS(&ret->prev_sol)
     );
     ret->device->CreateCommittedResource(
-        &heap_props, D3D12_HEAP_FLAG_NONE,
+        &heap_props_default, D3D12_HEAP_FLAG_NONE,
         &tex_desc, D3D12_RESOURCE_STATE_COMMON, NULL, IID_PPV_ARGS(&ret->curr_sol)
     );
     ret->device->CreateCommittedResource(
-        &heap_props, D3D12_HEAP_FLAG_NONE,
+        &heap_props_default, D3D12_HEAP_FLAG_NONE,
         &tex_desc, D3D12_RESOURCE_STATE_COMMON, NULL, IID_PPV_ARGS(&ret->next_sol)
     );
 
@@ -78,12 +78,18 @@ GpuWaves_Init (BYTE * memory, ID3D12GraphicsCommandList* cmdlist, ID3D12Device *
     buf_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     buf_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+    D3D12_HEAP_PROPERTIES heap_props_upload = {};
+    heap_props_upload.Type = D3D12_HEAP_TYPE_UPLOAD;
+    heap_props_upload.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heap_props_upload.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heap_props_upload.CreationNodeMask = 1;
+    heap_props_upload.VisibleNodeMask = 1;
     ret->device->CreateCommittedResource(
-        &heap_props, D3D12_HEAP_FLAG_NONE,
+        &heap_props_upload, D3D12_HEAP_FLAG_NONE,
         &buf_desc, D3D12_RESOURCE_STATE_GENERIC_READ, NULL, IID_PPV_ARGS(&ret->prev_upload_buffer)
     );
     ret->device->CreateCommittedResource(
-        &heap_props, D3D12_HEAP_FLAG_NONE,
+        &heap_props_upload, D3D12_HEAP_FLAG_NONE,
         &buf_desc, D3D12_RESOURCE_STATE_GENERIC_READ, NULL, IID_PPV_ARGS(&ret->curr_upload_buffer)
     );
 
@@ -137,14 +143,15 @@ GpuWaves_Init (BYTE * memory, ID3D12GraphicsCommandList* cmdlist, ID3D12Device *
     cmdlist->ResourceBarrier(1, &barrier4);
 
     D3D12_RESOURCE_BARRIER barrier5 = {};
-    barrier4.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier4.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier4.Transition.pResource = ret->next_sol;
-    barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier4.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier4.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier5.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier5.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier5.Transition.pResource = ret->next_sol;
+    barrier5.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+    barrier5.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier5.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
     cmdlist->ResourceBarrier(1, &barrier5);
+    ::free(init_data);
 #pragma endregion
     return ret;
 }
@@ -233,14 +240,6 @@ GpuWaves_Update (
         barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-        D3D12_RESOURCE_BARRIER barrier2 = {};
-        barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier2.Transition.pResource = wave->curr_sol;
-        barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
         cmdlist->ResourceBarrier(1, &barrier1);
         cmdlist->Dispatch(ngroup_x, ngroup_y, 1);
 
@@ -268,6 +267,14 @@ GpuWaves_Update (
 
         t = 0.0f; // reset time
 
+        D3D12_RESOURCE_BARRIER barrier2 = {};
+        barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier2.Transition.pResource = wave->curr_sol;
+        barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+        barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
         // curr_sol should be GENERIC_READ so it can be read by vertex shader
         cmdlist->ResourceBarrier(1, &barrier2);
     }
@@ -278,7 +285,7 @@ GpuWaves_Disturb (
     ID3D12GraphicsCommandList * cmdlist,
     ID3D12RootSignature * root_sig,
     ID3D12PipelineState * pso,
-    int i, int j, float magnitude
+    UINT i, UINT j, float magnitude
 ) {
     cmdlist->SetPipelineState(pso);
     cmdlist->SetComputeRootSignature(root_sig);

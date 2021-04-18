@@ -8,8 +8,8 @@ cbuffer CbUpdateSettings {
 };
 
 RWTexture2D<float> global_prev_sol_input : register(u0);
-RWTexture2D<float> global_curr_sol_input : register(u0);
-RWTexture2D<float> global_output : register(u0);
+RWTexture2D<float> global_curr_sol_input : register(u1);
+RWTexture2D<float> global_output : register(u2);
 
 [numthreads(16, 16, 1)]
 void update_wave_cs (int3 dispatch_threadid : SV_DispatchThreadID) {

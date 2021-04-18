@@ -42,7 +42,7 @@ enum RENDER_LAYER : int {
     LAYER_TRANSPARENT = 1,
     LAYER_ALPHATESTED = 2,
     LAYER_ALPHATESTED_TREESPRITES = 3,
-    LAYER_GPU_WAVES = 4,
+    LAYER_GPU_WAVES_RENDER = 4,
     LAYER_GPU_WAVES_DISTURB = 5,
     LAYER_GPU_WAVES_UPDATE = 6,
 
@@ -169,6 +169,7 @@ struct D3DRenderContext {
     RenderItemArray                 transparent_ritems;
     RenderItemArray                 alphatested_ritems;
     RenderItemArray                 alphatested_treesprites_ritems;
+    RenderItemArray                 gpu_waves_rtimes;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -477,11 +478,14 @@ create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * rende
     //D3DCreateBlob(vb_byte_size, &render_ctx->water_geom.vb_cpu);
     //CopyMemory(render_ctx->water_geom.vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
+    CHECK_AND_FAIL(D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_cpu));
+    if (vertices)
+        CopyMemory(render_ctx->geom[GEOM_WATER].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
     CHECK_AND_FAIL(D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_cpu));
     if (indices)
         CopyMemory(render_ctx->geom[GEOM_WATER].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    //create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_uploader, &render_ctx->geom[GEOM_WATER].vb_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_uploader, &render_ctx->geom[GEOM_WATER].vb_gpu);
     create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_uploader, &render_ctx->geom[GEOM_WATER].ib_gpu);
 
     render_ctx->geom[GEOM_WATER].vb_byte_stide = sizeof(Vertex);
@@ -579,6 +583,8 @@ create_render_items (
     RenderItemArray * transparent_ritems,
     RenderItemArray * alphatested_ritems,
     RenderItemArray * alphatested_treesprites_ritems,
+    RenderItemArray * gpu_waves_ritems,
+    GpuWaves * wave,
     MeshGeometry * box_geom, MeshGeometry * water_geom, MeshGeometry * grid_geom, MeshGeometry * treesprites_geom,
     Material materials []
 ) {
@@ -594,12 +600,15 @@ create_render_items (
     all_ritems->ritems[RITEM_WATER].base_vertex_loc = water_geom->submesh_geoms[0].base_vertex_location;
     all_ritems->ritems[RITEM_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
     all_ritems->ritems[RITEM_WATER].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_WATER].grid_spatial_step = 1;
-    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size = {1.0f, 1.0f};
+    all_ritems->ritems[RITEM_WATER].grid_spatial_step = wave->spatial_step;
+    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size.x = 1.0f / wave->ncol;
+    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size.y = 1.0f / wave->nrow;
     all_ritems->ritems[RITEM_WATER].initialized = true;
     all_ritems->size++;
     transparent_ritems->ritems[0] = all_ritems->ritems[RITEM_WATER];
     transparent_ritems->size++;
+    gpu_waves_ritems->ritems[0] = all_ritems->ritems[RITEM_WATER];
+    gpu_waves_ritems->size++;
 
     all_ritems->ritems[RITEM_GRID].world = Identity4x4();
     all_ritems->ritems[RITEM_GRID].tex_transform = Identity4x4();
@@ -897,12 +906,19 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     tex_table.RegisterSpace = 0;
     tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
+    D3D12_DESCRIPTOR_RANGE displacement_map_table = {};
+    displacement_map_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    displacement_map_table.NumDescriptors = 1;
+    displacement_map_table.BaseShaderRegister = 1;
+    displacement_map_table.RegisterSpace = 0;
+    displacement_map_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[5] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
     slot_root_params[0].DescriptorTable.pDescriptorRanges = &tex_table;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     slot_root_params[1].Descriptor.ShaderRegister = 0;
@@ -919,12 +935,17 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     slot_root_params[3].Descriptor.RegisterSpace = 0;
     slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[4].DescriptorTable.pDescriptorRanges = &displacement_map_table;
+    slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
     get_static_samplers(samplers);
 
     // A root signature is an array of root parameters.
     D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = 4;
+    root_sig_desc.NumParameters = _countof(slot_root_params);
     root_sig_desc.pParameters = slot_root_params;
     root_sig_desc.NumStaticSamplers = _COUNT_SAMPLER;
     root_sig_desc.pStaticSamplers = samplers;
@@ -939,6 +960,71 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     }
 
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
+}
+static void
+create_root_signature_gpuwaves (ID3D12Device * device, ID3D12RootSignature ** wave_root_signature) {
+
+    D3D12_DESCRIPTOR_RANGE uav_table0 = {};
+    uav_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_table0.NumDescriptors = 1;
+    uav_table0.BaseShaderRegister = 0;
+    uav_table0.RegisterSpace = 0;
+    uav_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uav_table1 = {};
+    uav_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_table1.NumDescriptors = 1;
+    uav_table1.BaseShaderRegister = 1;
+    uav_table1.RegisterSpace = 0;
+    uav_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uav_table2 = {};
+    uav_table2.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_table2.NumDescriptors = 1;
+    uav_table2.BaseShaderRegister = 2;
+    uav_table2.RegisterSpace = 0;
+    uav_table2.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
+    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    slot_root_params[0].Constants.Num32BitValues = 6;
+    slot_root_params[0].Constants.ShaderRegister = 0;
+    slot_root_params[0].Constants.RegisterSpace = 0;
+    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[1].DescriptorTable.pDescriptorRanges = &uav_table0;
+    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table1;
+    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[3].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[3].DescriptorTable.pDescriptorRanges = &uav_table2;
+    slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // A root signature is an array of root parameters.
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = _countof(slot_root_params);
+    root_sig_desc.pParameters = slot_root_params;
+    root_sig_desc.NumStaticSamplers = 0;
+    root_sig_desc.pStaticSamplers = NULL;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ID3DBlob * serialized_root_sig = nullptr;
+    ID3DBlob * error_blob = nullptr;
+    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
+
+    if (error_blob) {
+        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
+    }
+
+    device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(wave_root_signature));
 }
 static void
 create_pso (
@@ -1100,6 +1186,32 @@ create_pso (
     tree_pso_desc.InputLayout.pInputElementDescs = treesprite_input_desc;
     tree_pso_desc.InputLayout.NumElements = ARRAY_COUNT(treesprite_input_desc);
     render_ctx->device->CreateGraphicsPipelineState(&tree_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]));
+
+    //
+    // -- Create PSO for drawing waves
+    //
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC waves_render_pso = transparent_pso_desc;
+    waves_render_pso.VS.pShaderBytecode = vertex_shader_code_wave->GetBufferPointer();
+    waves_render_pso.VS.BytecodeLength = vertex_shader_code_wave->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&waves_render_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_RENDER]));
+    //
+    // -- Create PSO for disturbing waves
+    //
+    D3D12_COMPUTE_PIPELINE_STATE_DESC waves_disturb_pso = {};
+    waves_disturb_pso.pRootSignature = render_ctx->root_signature_waves;
+    waves_disturb_pso.CS.pShaderBytecode = compute_shader_code_disturb_wave->GetBufferPointer();
+    waves_disturb_pso.CS.BytecodeLength = compute_shader_code_disturb_wave->GetBufferSize();
+    waves_disturb_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+    render_ctx->device->CreateComputePipelineState(&waves_disturb_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_DISTURB]));
+    //
+    // -- Create PSO for updating waves
+    //
+    D3D12_COMPUTE_PIPELINE_STATE_DESC waves_update_pso = {};
+    waves_update_pso.pRootSignature = render_ctx->root_signature_waves;
+    waves_update_pso.CS.pShaderBytecode = compute_shader_code_update_wave->GetBufferPointer();
+    waves_update_pso.CS.BytecodeLength = compute_shader_code_update_wave->GetBufferSize();
+    waves_update_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+    render_ctx->device->CreateComputePipelineState(&waves_update_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_UPDATE]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1291,52 +1403,56 @@ update_waves_gpu (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * t
         render_ctx->psos[LAYER_GPU_WAVES_UPDATE], delta_time
     );
 }
-//static void
-//update_waves_vb (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
-//    float total_time = Timer_GetTotalTime(timer);
-//    float delta_time = timer->delta_time;
-//
-//    // Every quarter second, generate a random wave.
-//    static float t_base = 0.0f;
-//    if ((total_time - t_base) >= 0.25f) {
-//        t_base += 0.25f;
-//
-//        int i = rand_int(4, waves->nrow - 5);
-//        int j = rand_int(4, waves->ncol - 5);
-//
-//        float r = rand_float(0.2f, 0.5f);
-//
-//        Waves_Disturb(waves, i, j, r);
-//    }
-//
-//    // Update the wave simulation.
-//    XMFLOAT3 * temp = (XMFLOAT3 *)::malloc(sizeof(XMFLOAT3) * waves->nvtx);
-//    Waves_Update(waves, delta_time, temp);
-//    ::free(temp);
-//
-//    // Update the wave vertex buffer with the new solution.
-//    UINT frame_index = render_ctx->frame_index;
-//    uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
-//
-//    UINT v_size = (UINT64)sizeof(Vertex);
-//    for (int i = 0; i < waves->nvtx; ++i) {
-//        Vertex v;
-//
-//        v.position = Waves_GetPosition(waves, i);
-//        v.normal = waves->normal[i];
-//
-//            // Derive tex-coords from position by 
-//        // mapping [-w/2,w/2] --> [0,1]
-//        v.texc.x = 0.5f + v.position.x / waves->width;
-//        v.texc.y = 0.5f - v.position.z / waves->depth;
-//
-//        ::memcpy(wave_ptr + (UINT64)i * v_size, &v, v_size);
-//    }
-//    // NOTE(omid): We did the upload_buffer mapping to data pointer (when creating the upload_buffer)
-//
-//    // Set the dynamic VB of the wave renderitem to the current frame VB.
-//    render_ctx->all_ritems.ritems[RITEM_WATER].geometry->vb_gpu = render_ctx->frame_resources[frame_index].waves_vb;
-//}
+
+#if 0
+static void
+update_waves_vb (Waves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
+    float total_time = Timer_GetTotalTime(timer);
+    float delta_time = timer->delta_time;
+
+    // Every quarter second, generate a random wave.
+    static float t_base = 0.0f;
+    if ((total_time - t_base) >= 0.25f) {
+        t_base += 0.25f;
+
+        int i = rand_int(4, waves->nrow - 5);
+        int j = rand_int(4, waves->ncol - 5);
+
+        float r = rand_float(0.2f, 0.5f);
+
+        Waves_Disturb(waves, i, j, r);
+    }
+
+    // Update the wave simulation.
+    XMFLOAT3 * temp = (XMFLOAT3 *)::malloc(sizeof(XMFLOAT3) * waves->nvtx);
+    Waves_Update(waves, delta_time, temp);
+    ::free(temp);
+
+    // Update the wave vertex buffer with the new solution.
+    UINT frame_index = render_ctx->frame_index;
+    uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
+
+    UINT v_size = (UINT64)sizeof(Vertex);
+    for (int i = 0; i < waves->nvtx; ++i) {
+        Vertex v;
+
+        v.position = Waves_GetPosition(waves, i);
+        v.normal = waves->normal[i];
+
+            // Derive tex-coords from position by 
+        // mapping [-w/2,w/2] --> [0,1]
+        v.texc.x = 0.5f + v.position.x / waves->width;
+        v.texc.y = 0.5f - v.position.z / waves->depth;
+
+        ::memcpy(wave_ptr + (UINT64)i * v_size, &v, v_size);
+    }
+    // NOTE(omid): We did the upload_buffer mapping to data pointer (when creating the upload_buffer)
+
+    // Set the dynamic VB of the wave renderitem to the current frame VB.
+    render_ctx->all_ritems.ritems[RITEM_WATER].geometry->vb_gpu = render_ctx->frame_resources[frame_index].waves_vb;
+}
+#endif // 0
+
 static HRESULT
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
 
@@ -1401,7 +1517,7 @@ create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_R
     return barrier;
 }
 static HRESULT
-draw_main (D3DRenderContext * render_ctx) {
+draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1421,12 +1537,23 @@ draw_main (D3DRenderContext * render_ctx) {
     ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
     CHECK_AND_FAIL(ret);
 
+
+    ID3D12DescriptorHeap* descriptor_heaps [] = {render_ctx->srv_heap};
+    render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
+
+    update_waves_gpu(waves, render_ctx, &global_timer);
+
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+
     // -- set viewport and scissor
     render_ctx->direct_cmd_list->RSSetViewports(1, &render_ctx->viewport);
     render_ctx->direct_cmd_list->RSSetScissorRects(1, &render_ctx->scissor_rect);
 
     // -- indicate that the backbuffer will be used as the render target
-    D3D12_RESOURCE_BARRIER barrier1 = create_barrier(render_ctx->render_targets[backbuffer_index], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    D3D12_RESOURCE_BARRIER barrier1 = create_barrier(
+        render_ctx->render_targets[backbuffer_index],
+        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET
+    );
     render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier1);
 
     // -- get CPU descriptor handle that represents the start of the rtv heap
@@ -1438,14 +1565,12 @@ draw_main (D3DRenderContext * render_ctx) {
     render_ctx->direct_cmd_list->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
     render_ctx->direct_cmd_list->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
 
-    ID3D12DescriptorHeap* descriptor_heaps [] = {render_ctx->srv_heap};
-    render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
-
     render_ctx->direct_cmd_list->SetGraphicsRootSignature(render_ctx->root_signature);
 
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     render_ctx->direct_cmd_list->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
+    render_ctx->direct_cmd_list->SetGraphicsRootDescriptorTable(4, waves->curr_sol_srv); // set displacement map
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
@@ -1477,21 +1602,25 @@ draw_main (D3DRenderContext * render_ctx) {
         &render_ctx->alphatested_treesprites_ritems, frame_index
     );
     // 4. draw transparent objs
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_TRANSPARENT]);
+    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
     draw_render_items(
         render_ctx->direct_cmd_list,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
         render_ctx->srv_heap,
-        &render_ctx->transparent_ritems, frame_index
+        &render_ctx->gpu_waves_rtimes, frame_index
     );
 
     // Imgui draw call
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
 
     // -- indicate that the backbuffer will now be used to present
-    D3D12_RESOURCE_BARRIER barrier2 = create_barrier(render_ctx->render_targets[backbuffer_index], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    D3D12_RESOURCE_BARRIER barrier2 = create_barrier(
+        render_ctx->render_targets[backbuffer_index],
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PRESENT
+    );
     render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier2);
 
     // -- finish populating command list
@@ -1833,14 +1962,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // ========================================================================================================
 #pragma region Initialization
 
-    // Waves Initial Setup
-    uint32_t const nrow = 256;
-    uint32_t const ncols = 256;
-    uint32_t const N_VTX = nrow * ncols;
-    size_t wave_size = Waves_CalculateRequiredSize(nrow, ncols);
-    BYTE * wave_memory = (BYTE *)::malloc(wave_size);
-    GpuWaves * waves = Waves_Init(wave_memory, nrow, ncols, 1.0f, 0.03f, 4.0f, 0.2f);
-
     // Query Adapter (PhysicalDevice)
     IDXGIFactory * dxgi_factory = nullptr;
     CHECK_AND_FAIL(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&dxgi_factory)));
@@ -1993,7 +2114,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     );
 #pragma endregion
 
-    create_descriptor_heaps(render_ctx);
+    // Waves Initial Setup
+    uint32_t const nrow = 256;
+    uint32_t const ncols = 256;
+    uint32_t const N_VTX = nrow * ncols;
+    BYTE * wave_memory = (BYTE *)::malloc(sizeof(GpuWaves));
+    GpuWaves * waves = GpuWaves_Init(wave_memory, render_ctx->direct_cmd_list, render_ctx->device, nrow, ncols, 1.0f, 0.03f, 4.0f, 0.2f);
+
+    create_descriptor_heaps(render_ctx, waves);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2083,16 +2211,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         create_upload_buffer(render_ctx->device, pass_cb_size * 1, &render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb);
         // Initialize cb data
         ::memcpy(render_ctx->frame_resources[i].pass_cb_data_ptr, &render_ctx->frame_resources[i].pass_cb_data, sizeof(render_ctx->frame_resources[i].pass_cb_data));
-
-        create_upload_buffer(render_ctx->device, (UINT64)vertex_size * N_VTX, &render_ctx->frame_resources[i].waves_vb_data_ptr, &render_ctx->frame_resources[i].waves_vb);
-        // Initialize cb data
-        ::memcpy(render_ctx->frame_resources[i].waves_vb_data_ptr, &render_ctx->frame_resources[i].waves_vb_data, sizeof(render_ctx->frame_resources[i].waves_vb_data));
     }
 #pragma endregion
 
     // ========================================================================================================
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
+    create_root_signature_gpuwaves(render_ctx->device, &render_ctx->root_signature_waves);
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
@@ -2150,6 +2275,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, defines_wave, n_define_wave, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&vertex_shader_code_wave);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
             hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&pixel_shader_code_opaque);
@@ -2209,6 +2345,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"update_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_update_wave);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
             hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"disturb_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_disturb_wave);
@@ -2264,6 +2411,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         &render_ctx->transparent_ritems,
         &render_ctx->alphatested_ritems,
         &render_ctx->alphatested_treesprites_ritems,
+        &render_ctx->gpu_waves_rtimes,
+        waves,
         &render_ctx->geom[GEOM_BOX],
         &render_ctx->geom[GEOM_WATER],
         &render_ctx->geom[GEOM_GRID],
@@ -2392,9 +2541,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         update_obj_cbuffers(render_ctx);
         update_mat_cbuffers(render_ctx);
         update_pass_cbuffers(render_ctx, &global_timer);
-        update_waves_vb(waves, render_ctx, &global_timer);
 
-        CHECK_AND_FAIL(draw_main(render_ctx));
+        CHECK_AND_FAIL(draw_main(render_ctx, waves));
         CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
 
         // End of the loop updates
@@ -2421,11 +2569,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->frame_resources[i].obj_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].mat_cb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].pass_cb->Unmap(0, nullptr);
-        render_ctx->frame_resources[i].waves_vb->Unmap(0, nullptr);
         render_ctx->frame_resources[i].obj_cb->Release();
         render_ctx->frame_resources[i].mat_cb->Release();
         render_ctx->frame_resources[i].pass_cb->Release();
-        render_ctx->frame_resources[i].waves_vb->Release();
 
         render_ctx->frame_resources[i].cmd_list_alloc->Release();
     }
@@ -2434,10 +2580,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     for (unsigned i = 0; i < _COUNT_GEOM; i++) {
         render_ctx->geom[i].ib_uploader->Release();
-        if (i != GEOM_WATER) {    // water uses a dynamic vb
-            render_ctx->geom[i].vb_uploader->Release();
-            render_ctx->geom[i].vb_gpu->Release();
-        }
+        render_ctx->geom[i].vb_uploader->Release();
+        render_ctx->geom[i].vb_gpu->Release();
         render_ctx->geom[i].ib_gpu->Release();
     }   // is this a bug in d3d12sdklayers.dll ?
 
@@ -2452,7 +2596,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     pixel_shader_code_opaque->Release();
     vertex_shader_code->Release();
 
+    render_ctx->root_signature_waves->Release();
     render_ctx->root_signature->Release();
+
+    GpuWaves_Deinit(waves);
+    ::free(wave_memory);
 
     // release swapchain backbuffers resources
     for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i) {
@@ -2478,7 +2626,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     render_ctx->device->Release();
     dxgi_factory->Release();
 
-    ::free(wave_memory);
 
 #if (ENABLE_DEBUG_LAYER > 0)
     debug_interface_dx->Release();

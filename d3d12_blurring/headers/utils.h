@@ -151,11 +151,10 @@ struct FrameResource {
     ObjectConstants obj_cb_data;
     uint8_t * obj_cb_data_ptr;
 
-    // We cannot update a dynamic vertex buffer until the GPU is done processing
-    // the commands that reference it.  So each frame needs their own.
-    ID3D12Resource * waves_vb;
+    // Not used for Gpu waves
+    /*ID3D12Resource * waves_vb;
     Vertex waves_vb_data;
-    uint8_t * waves_vb_data_ptr;
+    uint8_t * waves_vb_data_ptr;*/
 
     // Fence value to mark commands up to this fence point.  This lets us
     // check if these frame resources are still in use by the GPU.
@@ -317,14 +316,14 @@ update_subresources_heap (
     // Minor validation
     D3D12_RESOURCE_DESC intermediate_desc = intermediate->GetDesc();
     D3D12_RESOURCE_DESC destination_desc = dest_resource->GetDesc();
-    SIMPLE_ASSERT_FALSE((intermediate_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
+    _ASSERT_EXPR(!(intermediate_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
                          intermediate_desc.Width < required_size + layouts[0].Offset ||
                          required_size > (SIZE_T) - 1 ||
                          (destination_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER &&
-                          (first_subresource != 0 || n_subresources != 1))), "validation failed!");
+                          (first_subresource != 0 || n_subresources != 1))), _T("validation failed!"));
 
     BYTE * data;
-    CHECK_AND_FAIL(intermediate->Map(0, NULL, reinterpret_cast<void**>(&data)));
+    /*_ASSERT_EXPR*/(intermediate->Map(0, NULL, reinterpret_cast<void**>(&data)), _T("Mapping intermediate resource failed"));
 
     for (UINT i = 0; i < n_subresources; ++i) {
         if (row_sizes_in_bytes[i] > (SIZE_T)-1) return 0;
