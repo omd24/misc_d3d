@@ -227,7 +227,7 @@ GpuWaves_Update (
         cmdlist->SetComputeRootDescriptorTable(3, wave->next_sol_uav);
 
         // how many groups do we need to dispatch
-        // not that nrow and ncol should be divisible by 16
+        // note that nrow and ncol should be divisible by 16
         // so there is no remainder
         UINT ngroup_x = wave->ncol / 16;
         UINT ngroup_y = wave->nrow / 16;

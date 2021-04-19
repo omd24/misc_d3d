@@ -26,7 +26,7 @@ struct SubmeshGeometry {
     DirectX::BoundingBox bounds;
 };
 struct MeshGeometry {
-    //// Give it a name so we can look it up by name.
+    // Give it a name so we can look it up by name.
     //char const * name;
 
     UINT vb_byte_stide;

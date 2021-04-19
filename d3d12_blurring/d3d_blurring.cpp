@@ -368,8 +368,8 @@ create_shape_geometry (D3DRenderContext * render_ctx) {
     if (indices)
         CopyMemory(render_ctx->geom[GEOM_BOX].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_uploader, &render_ctx->geom[GEOM_BOX].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_uploader, &render_ctx->geom[GEOM_BOX].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_gpu, &render_ctx->geom[GEOM_BOX].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_gpu, &render_ctx->geom[GEOM_BOX].ib_uploader);
 
     render_ctx->geom[GEOM_BOX].vb_byte_stide = sizeof(Vertex);
     render_ctx->geom[GEOM_BOX].vb_byte_size = vb_byte_size;
@@ -424,8 +424,8 @@ create_land_geometry (D3DRenderContext * render_ctx) {
     if (indices)
         CopyMemory(render_ctx->geom[GEOM_GRID].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_uploader, &render_ctx->geom[GEOM_GRID].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_uploader, &render_ctx->geom[GEOM_GRID].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_gpu, &render_ctx->geom[GEOM_GRID].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_gpu, &render_ctx->geom[GEOM_GRID].ib_uploader);
 
     render_ctx->geom[GEOM_GRID].vb_byte_stide = sizeof(Vertex);
     render_ctx->geom[GEOM_GRID].vb_byte_size = vb_byte_size;
@@ -474,8 +474,8 @@ create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * rende
     if (indices)
         CopyMemory(render_ctx->geom[GEOM_WATER].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_uploader, &render_ctx->geom[GEOM_WATER].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_uploader, &render_ctx->geom[GEOM_WATER].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_gpu, &render_ctx->geom[GEOM_WATER].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_gpu, &render_ctx->geom[GEOM_WATER].ib_uploader);
 
     render_ctx->geom[GEOM_WATER].vb_byte_stide = sizeof(Vertex);
     render_ctx->geom[GEOM_WATER].vb_byte_size = vb_byte_size;
@@ -550,8 +550,8 @@ create_treesprites_geometry (D3DRenderContext * render_ctx) {
     if (indices)
         CopyMemory(render_ctx->geom[GEOM_TREESPRITE].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_uploader, &render_ctx->geom[GEOM_TREESPRITE].vb_gpu);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_uploader, &render_ctx->geom[GEOM_TREESPRITE].ib_gpu);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_gpu, &render_ctx->geom[GEOM_TREESPRITE].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_gpu, &render_ctx->geom[GEOM_TREESPRITE].ib_uploader);
 
     render_ctx->geom[GEOM_TREESPRITE].vb_byte_stide = sizeof(TreeSpriteVertex);
     render_ctx->geom[GEOM_TREESPRITE].vb_byte_size = vb_byte_size;
@@ -978,7 +978,7 @@ create_root_signature_gpuwaves (ID3D12Device * device, ID3D12RootSignature ** wa
     D3D12_ROOT_PARAMETER slot_root_params[4] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    slot_root_params[0].Constants.Num32BitValues = 6;
+    slot_root_params[0].Constants.Num32BitValues = 6; /* k1, k2, k3, magnitude, [i, j] */
     slot_root_params[0].Constants.ShaderRegister = 0;
     slot_root_params[0].Constants.RegisterSpace = 0;
     slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1393,56 +1393,6 @@ update_waves_gpu (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * t
         render_ctx->psos[LAYER_GPU_WAVES_UPDATE], delta_time
     );
 }
-
-#if 0
-static void
-update_waves_vb (Waves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
-    float total_time = Timer_GetTotalTime(timer);
-    float delta_time = timer->delta_time;
-
-    // Every quarter second, generate a random wave.
-    static float t_base = 0.0f;
-    if ((total_time - t_base) >= 0.25f) {
-        t_base += 0.25f;
-
-        int i = rand_int(4, waves->nrow - 5);
-        int j = rand_int(4, waves->ncol - 5);
-
-        float r = rand_float(0.2f, 0.5f);
-
-        Waves_Disturb(waves, i, j, r);
-    }
-
-    // Update the wave simulation.
-    XMFLOAT3 * temp = (XMFLOAT3 *)::malloc(sizeof(XMFLOAT3) * waves->nvtx);
-    Waves_Update(waves, delta_time, temp);
-    ::free(temp);
-
-    // Update the wave vertex buffer with the new solution.
-    UINT frame_index = render_ctx->frame_index;
-    uint8_t * wave_ptr = render_ctx->frame_resources[frame_index].waves_vb_data_ptr;
-
-    UINT v_size = (UINT64)sizeof(Vertex);
-    for (int i = 0; i < waves->nvtx; ++i) {
-        Vertex v;
-
-        v.position = Waves_GetPosition(waves, i);
-        v.normal = waves->normal[i];
-
-            // Derive tex-coords from position by 
-        // mapping [-w/2,w/2] --> [0,1]
-        v.texc.x = 0.5f + v.position.x / waves->width;
-        v.texc.y = 0.5f - v.position.z / waves->depth;
-
-        ::memcpy(wave_ptr + (UINT64)i * v_size, &v, v_size);
-    }
-    // NOTE(omid): We did the upload_buffer mapping to data pointer (when creating the upload_buffer)
-
-    // Set the dynamic VB of the wave renderitem to the current frame VB.
-    render_ctx->all_ritems.ritems[RITEM_WATER].geometry->vb_gpu = render_ctx->frame_resources[frame_index].waves_vb;
-}
-#endif // 0
-
 static HRESULT
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
 
@@ -1523,7 +1473,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
     ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
     CHECK_AND_FAIL(ret);
 
-    ID3D12DescriptorHeap* descriptor_heaps [] = {render_ctx->srv_heap};
+    ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
     update_waves_gpu(waves, render_ctx, &global_timer);
@@ -2186,11 +2136,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     }
 #pragma endregion
 
-#pragma region Create CBuffers and Dynamic Vertex Buffer (waves_vb)
+#pragma region Create CBuffers
     UINT obj_cb_size = sizeof(ObjectConstants);
     UINT mat_cb_size = sizeof(MaterialConstants);
     UINT pass_cb_size = sizeof(PassConstants);
-    UINT vertex_size = sizeof(Vertex);
     for (UINT i = 0; i < NUM_QUEUING_FRAMES; ++i) {
         // -- create a cmd-allocator for each frame
         res = render_ctx->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&render_ctx->frame_resources[i].cmd_list_alloc));
