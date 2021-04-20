@@ -11,7 +11,7 @@ struct BlurFilter {
     int     blur_radius_max;
     int     blur_radius;
     size_t  weight_count;
-    float * weights;
+    float * weights;        // pointer to heap allocated array of float
 
     DXGI_FORMAT format;
 
@@ -31,6 +31,9 @@ struct BlurFilter {
     ID3D12Resource * blur_map0;
     ID3D12Resource * blur_map1;
 };
+
+size_t
+BlurFilter_CalculateRequiredSize ();
 
 BlurFilter *
 BlurFilter_Init (BYTE * memory, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format);

@@ -35,6 +35,12 @@ void horizontal_blur_cs (
     // put in an array for each indexing
     float weights[11] = {w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10};
 
+    // we don't have Texture2D.Length field
+    int tex_x = 0;
+    int tex_y = 0;
+    global_input.GetDimensions(tex_x, tex_y);
+    int2 tex_xy = int2(tex_x, tex_y);
+
     //
     // fill local thread storage to reduce bandwith.
     // to blur N pixels we need to load N + 2 * BlurRadius pixels
@@ -49,13 +55,13 @@ void horizontal_blur_cs (
     }
     if (group_threadid.x >= (N - global_blur_radius)) {
         // clamp bounds at image border
-        int x = min(dispatch_theadid.x + global_blur_radius, global_input.Length.x - 1);
+        int x = min(dispatch_theadid.x + global_blur_radius, tex_x - 1);
         global_cache[group_threadid.x + 2 * global_blur_radius] =
             global_input[int2(x, dispatch_theadid.y)];
     }
     // clamp bounds at image border
     global_cache[group_threadid.x + global_blur_radius] =
-        global_input[min(dispatch_theadid.xy, global_input.Length.xy - 1)];
+        global_input[min(dispatch_theadid.xy, tex_xy - 1)];
 
     // wait for all threads to finish
     GroupMemoryBarrierWithGroupSync();
@@ -79,6 +85,12 @@ void vertical_blur_cs (
     // put in an array for each indexing
     float weights[11] = {w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10};
 
+    // we don't have Texture2D.Length field
+    int tex_x = 0;
+    int tex_y = 0;
+    global_input.GetDimensions(tex_x, tex_y);
+    int2 tex_xy = int2(tex_x, tex_y);
+
     //
     // fill local thread storage to reduce bandwith.
     // to blur N pixels we need to load N + 2 * BlurRadius pixels
@@ -93,13 +105,13 @@ void vertical_blur_cs (
     }
     if (group_threadid.y >= (N - global_blur_radius)) {
         // clamp bounds at image border
-        int y = min(dispatch_theadid.y + global_blur_radius, global_input.Length.y - 1);
+        int y = min(dispatch_theadid.y + global_blur_radius, tex_y - 1);
         global_cache[group_threadid.y + 2 * global_blur_radius] =
             global_input[int2(dispatch_theadid.x, y)];
     }
     // clamp bounds at image border
     global_cache[group_threadid.y + global_blur_radius] =
-        global_input[min(dispatch_theadid.xy, global_input.Length.xy - 1)];
+        global_input[min(dispatch_theadid.xy, tex_xy - 1)];
 
     // wait for all threads to finish
     GroupMemoryBarrierWithGroupSync();

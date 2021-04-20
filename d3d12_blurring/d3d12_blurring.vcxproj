@@ -150,10 +150,12 @@
     <ClCompile Include="..\externals\imgui\imgui_impl_win32.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="blur_filter.cpp" />
     <ClCompile Include="d3d_blurring.cpp" />
     <ClCompile Include="gpu_waves.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="blur_filter.h" />
     <ClInclude Include="headers\common.h" />
     <ClInclude Include="headers\dds_loader.h" />
     <ClInclude Include="headers\game_timer.h" />
@@ -162,6 +164,9 @@
     <ClInclude Include="gpu_waves.h" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="shaders\blur.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
     <FxCompile Include="shaders\default.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </FxCompile>

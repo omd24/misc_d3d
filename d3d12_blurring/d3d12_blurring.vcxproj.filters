@@ -42,6 +42,9 @@
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp">
       <Filter>DearImGui</Filter>
     </ClCompile>
+    <ClCompile Include="blur_filter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="headers\common.h">
@@ -62,6 +65,9 @@
     <ClInclude Include="gpu_waves.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="blur_filter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\default.hlsl">
@@ -74,6 +80,9 @@
       <Filter>Resource Files</Filter>
     </FxCompile>
     <FxCompile Include="shaders\wave_sim.hlsl">
+      <Filter>Resource Files</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\blur.hlsl">
       <Filter>Resource Files</Filter>
     </FxCompile>
   </ItemGroup>

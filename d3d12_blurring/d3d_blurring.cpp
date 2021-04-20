@@ -11,6 +11,7 @@
 #include "headers/dds_loader.h"
 
 #include "gpu_waves.h"
+#include "blur_filter.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_win32.h>
@@ -45,8 +46,10 @@ enum RENDER_LAYER : int {
     LAYER_GPU_WAVES_RENDER = 4,
     LAYER_GPU_WAVES_DISTURB = 5,
     LAYER_GPU_WAVES_UPDATE = 6,
+    LAYER_HOR_BLUR = 7,
+    LAYER_VER_BLUR = 8,
 
-    _COUNT_RENDER_LAYER
+    _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
     RITEM_WATER = 0,
@@ -145,7 +148,8 @@ struct D3DRenderContext {
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
     ID3D12RootSignature *           root_signature_waves;
-    ID3D12PipelineState *           psos[_COUNT_RENDER_LAYER];
+    ID3D12RootSignature *           root_signature_postprocessing;
+    ID3D12PipelineState *           psos[_COUNT_RENDERCOMPUTE_LAYER];
 
     // Command objects
     ID3D12CommandQueue *            cmd_queue;
@@ -694,11 +698,14 @@ draw_render_items (
     }
 }
 static void
-create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave) {
+create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave, BlurFilter * blur) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX + 6 /* GpuWaves descriptors */ + 1 /* imgui descriptor */;
+    srv_heap_desc.NumDescriptors = _COUNT_TEX + 
+        6 +     /* GpuWaves descriptors */
+        4 +     /* Blur descriptors     */
+        1 ;     /* imgui descriptor     */
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -766,12 +773,27 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave) {
     descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
     render_ctx->device->CreateShaderResourceView(tree_tex, &srv_desc, descriptor_cpu_handle);
 
+    //
     // Create GpuWaves descriptors
+    //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_waves = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_waves.ptr += _COUNT_TEX * render_ctx->cbv_srv_uav_descriptor_size;
+    hcpu_waves.ptr += 
+        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_waves = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_waves.ptr += _COUNT_TEX * render_ctx->cbv_srv_uav_descriptor_size;
+    hgpu_waves.ptr += 
+        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
     GpuWaves_BuildDescriptors(wave, hcpu_waves, hgpu_waves, render_ctx->cbv_srv_uav_descriptor_size);
+
+    //
+    // Create Blur descriptors
+    //
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_blur = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_blur.ptr += 
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_blur = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    hgpu_blur.ptr += 
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    BlurFilter_CreateDescriptors(blur, hcpu_blur, hgpu_blur, render_ctx->cbv_srv_uav_descriptor_size);
 
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
@@ -1017,6 +1039,62 @@ create_root_signature_gpuwaves (ID3D12Device * device, ID3D12RootSignature ** wa
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(wave_root_signature));
 }
 static void
+create_root_signature_postprocessing (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
+
+    D3D12_DESCRIPTOR_RANGE srv_table = {};
+    srv_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srv_table.NumDescriptors = 1;
+    srv_table.BaseShaderRegister = 0;
+    srv_table.RegisterSpace = 0;
+    srv_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uav_table = {};
+    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_table.NumDescriptors = 1;
+    uav_table.BaseShaderRegister = 0;
+    uav_table.RegisterSpace = 0;
+    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
+    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    slot_root_params[0].Constants.Num32BitValues = 12; /* blur_radius, weights [11] */
+    slot_root_params[0].Constants.ShaderRegister = 0;
+    slot_root_params[0].Constants.RegisterSpace = 0;
+    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table;
+    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
+    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // A root signature is an array of root parameters.
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = _countof(slot_root_params);
+    root_sig_desc.pParameters = slot_root_params;
+    root_sig_desc.NumStaticSamplers = 0;
+    root_sig_desc.pStaticSamplers = NULL;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ID3DBlob * serialized_root_sig = nullptr;
+    ID3DBlob * error_blob = nullptr;
+    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
+
+    if (error_blob) {
+        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
+    }
+
+    device->CreateRootSignature(
+        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
+        IID_PPV_ARGS(postprocessing_root_signature)
+    );
+}
+static void
 create_pso (
     D3DRenderContext * render_ctx,
     IDxcBlob * vertex_shader_code_std,
@@ -1027,7 +1105,9 @@ create_pso (
     IDxcBlob * geo_shader_code_tree,
     IDxcBlob * pixel_shader_code_tree,
     IDxcBlob * compute_shader_code_update_wave,
-    IDxcBlob * compute_shader_code_disturb_wave
+    IDxcBlob * compute_shader_code_disturb_wave,
+    IDxcBlob * compute_shader_code_hor_blur,
+    IDxcBlob * compute_shader_code_ver_blur
 ) {
     // -- Create vertex-input-layout Elements
 
@@ -1202,6 +1282,24 @@ create_pso (
     waves_update_pso.CS.BytecodeLength = compute_shader_code_update_wave->GetBufferSize();
     waves_update_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&waves_update_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_UPDATE]));
+    //
+    // -- Create PSO for horizontal blur
+    //
+    D3D12_COMPUTE_PIPELINE_STATE_DESC hor_blur_pso = {};
+    hor_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing;
+    hor_blur_pso.CS.pShaderBytecode = compute_shader_code_hor_blur->GetBufferPointer();
+    hor_blur_pso.CS.BytecodeLength = compute_shader_code_hor_blur->GetBufferSize();
+    hor_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+    render_ctx->device->CreateComputePipelineState(&hor_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_HOR_BLUR]));
+    //
+    // -- Create PSO for vertical blur
+    //
+    D3D12_COMPUTE_PIPELINE_STATE_DESC ver_blur_pso = {};
+    ver_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing;
+    ver_blur_pso.CS.pShaderBytecode = compute_shader_code_ver_blur->GetBufferPointer();
+    ver_blur_pso.CS.BytecodeLength = compute_shader_code_ver_blur->GetBufferSize();
+    ver_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+    render_ctx->device->CreateComputePipelineState(&ver_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_VER_BLUR]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1759,8 +1857,10 @@ check_active_item () {
     else
         global_mouse_active = true;
 }
+
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 static LRESULT CALLBACK
 main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // Handle imgui window
@@ -2065,9 +2165,23 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     uint32_t const ncols = 256;
     uint32_t const N_VTX = nrow * ncols;
     BYTE * wave_memory = (BYTE *)::malloc(sizeof(GpuWaves));
-    GpuWaves * waves = GpuWaves_Init(wave_memory, render_ctx->direct_cmd_list, render_ctx->device, nrow, ncols, 0.25f, 0.03f, 2.0f, 0.2f);
+    GpuWaves * waves = GpuWaves_Init(
+        wave_memory,
+        render_ctx->direct_cmd_list,
+        render_ctx->device,
+        nrow, ncols, 0.25f, 0.03f, 2.0f, 0.2f
+    );
 
-    create_descriptor_heaps(render_ctx, waves);
+    // Blur Initial Setup
+    size_t blur_size = BlurFilter_CalculateRequiredSize();
+    BYTE * blur_memory = (BYTE *)::malloc(blur_size);
+    BlurFilter * blur_filter = BlurFilter_Init(
+        blur_memory,
+        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
+        DXGI_FORMAT_R8G8B8A8_UNORM
+    );
+
+    create_descriptor_heaps(render_ctx, waves, blur_filter);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2163,6 +2277,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
     create_root_signature_gpuwaves(render_ctx->device, &render_ctx->root_signature_waves);
+    create_root_signature_postprocessing(render_ctx->device, &render_ctx->root_signature_postprocessing);
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
@@ -2180,10 +2295,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     wchar_t const * shaders_path = L"./shaders/default.hlsl";
     wchar_t const * tree_shader_path = L"./shaders/tree_sprite.hlsl";
     wchar_t const * wavesim_shader_path = L"./shaders/wave_sim.hlsl";
+    wchar_t const * blur_shader_path = L"./shaders/blur.hlsl";
     uint32_t code_page = CP_UTF8;
     IDxcBlobEncoding * shader_blob = nullptr;
-    IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need a different blob for trees
-    IDxcBlobEncoding * shader_blob_waves = nullptr;   // TODO(omid): do we need a different blob for trees
+    IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need different blobs
+    IDxcBlobEncoding * shader_blob_waves = nullptr;
+    IDxcBlobEncoding * shader_blob_blur = nullptr;
     IDxcOperationResult * dxc_res = nullptr;
     IDxcBlob * vertex_shader_code = nullptr;
     IDxcBlob * vertex_shader_code_wave = nullptr;
@@ -2194,6 +2311,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     IDxcBlob * pixel_shader_code_tree = nullptr;
     IDxcBlob * compute_shader_code_update_wave = nullptr;
     IDxcBlob * compute_shader_code_disturb_wave = nullptr;
+    IDxcBlob * compute_shader_code_hor_blur = nullptr;
+    IDxcBlob * compute_shader_code_ver_blur = nullptr;
     {   // standard shaders
         hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
         if (shader_blob) {
@@ -2317,6 +2436,39 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             }
         }
     }
+    {   // blur compute-shaders
+        hr = dxc_lib->CreateBlobFromFile(blur_shader_path, &code_page, &shader_blob_blur);
+        if (shader_blob_blur) {
+            hr = dxc_compiler->Compile(shader_blob_blur, blur_shader_path, L"horizontal_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&compute_shader_code_hor_blur);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+            hr = dxc_compiler->Compile(shader_blob_blur, blur_shader_path, L"vertical_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&compute_shader_code_ver_blur);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+        }
+    }
     _ASSERT_EXPR(vertex_shader_code, "invalid shader");
     _ASSERT_EXPR(vertex_shader_code_wave, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
@@ -2326,6 +2478,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     _ASSERT_EXPR(pixel_shader_code_tree, "invalid shader");
     _ASSERT_EXPR(compute_shader_code_update_wave, "invalid shader");
     _ASSERT_EXPR(compute_shader_code_disturb_wave, "invalid shader");
+    _ASSERT_EXPR(compute_shader_code_hor_blur, "invalid shader");
+    _ASSERT_EXPR(compute_shader_code_ver_blur, "invalid shader");
 
 #pragma endregion
 
@@ -2340,7 +2494,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         geo_shader_code_tree,
         pixel_shader_code_tree,
         compute_shader_code_update_wave,
-        compute_shader_code_disturb_wave
+        compute_shader_code_disturb_wave,
+        compute_shader_code_hor_blur,
+        compute_shader_code_ver_blur
     );
 #pragma endregion PSO_Creation
 
@@ -2535,7 +2691,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->geom[i].ib_gpu->Release();
     }   // is this a bug in d3d12sdklayers.dll ?
 
-    for (int i = 0; i < _COUNT_RENDER_LAYER; ++i) {
+    for (int i = 0; i < _COUNT_RENDERCOMPUTE_LAYER; ++i) {
         render_ctx->psos[i]->Release();
     }
 
@@ -2546,9 +2702,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     pixel_shader_code_opaque->Release();
     vertex_shader_code->Release();
 
+    render_ctx->root_signature_postprocessing->Release();
     render_ctx->root_signature_waves->Release();
     render_ctx->root_signature->Release();
 
+    BlurFilter_Deinit(blur_filter);
+    ::free(blur_memory);
     GpuWaves_Deinit(waves);
     ::free(wave_memory);
 

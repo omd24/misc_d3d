@@ -76,7 +76,14 @@ create_resources_internal (BlurFilter * filter) {
         D3D12_RESOURCE_STATE_COMMON, NULL, IID_PPV_ARGS(&filter->blur_map1)
     );
 }
-
+size_t
+BlurFilter_CalculateRequiredSize () {
+    // calculate weights array size
+    float sigma = 2.5f;
+    int r = (int)ceilf(2.0f * sigma);
+    int weight_count = (2 * r + 1);
+    return sizeof(BlurFilter) + (weight_count * sizeof(float));
+}
 BlurFilter *
 BlurFilter_Init (BYTE * memory, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format) {
     BlurFilter * ret = nullptr;
@@ -89,6 +96,7 @@ BlurFilter_Init (BYTE * memory, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT 
         int r = (int)ceilf(2.0f * sigma);
         ret->weight_count = (2 * r + 1);
         ret->blur_radius = (int)ret->weight_count / 2;
+        ret->blur_radius_max = 5;
         calc_gauss_weights(ret, sigma, ret->weights, ret->weight_count);
 
         ret->device = dev;
@@ -207,7 +215,7 @@ BlurFilter_Execute (
     barrier4.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cmdlist->ResourceBarrier(1, &barrier4);
 
-    for (int i = 0; i < blur_count; ++i) {
+    for (UINT i = 0; i < blur_count; ++i) {
         //
         // Horizontal Blur Pass
         //
