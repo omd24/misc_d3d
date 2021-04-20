@@ -25,7 +25,9 @@
 
 // _ASSERT_EXPR macro
 #include <crtdbg.h>
+#ifdef _DEBUG
 #pragma comment(lib, "ucrtd.lib")
+#endif
 
 #define SIMPLE_ASSERT(exp, msg)  \
     if(!(exp)) {            \

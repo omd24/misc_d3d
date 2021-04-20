@@ -40,7 +40,14 @@ void horizontal_blur_cs (
     int tex_y = 0;
     global_input.GetDimensions(tex_x, tex_y);
     int2 tex_xy = int2(tex_x, tex_y);
-
+    //float tex_x;
+    //float tex_y;
+    //global_input.GetDimensions(tex_x, tex_y);
+    //float2 tex_xy = float2(tex_x, tex_y);
+    //int tex_x = 1280;
+    //int tex_y = 720;
+    //int2 tex_xy = int2(tex_x, tex_y);
+    
     //
     // fill local thread storage to reduce bandwith.
     // to blur N pixels we need to load N + 2 * BlurRadius pixels
@@ -90,6 +97,13 @@ void vertical_blur_cs (
     int tex_y = 0;
     global_input.GetDimensions(tex_x, tex_y);
     int2 tex_xy = int2(tex_x, tex_y);
+    //float tex_x;
+    //float tex_y;
+    //global_input.GetDimensions(tex_x, tex_y);
+    //float2 tex_xy = float2(tex_x, tex_y);
+    //int tex_x = 1280;
+    //int tex_y = 720;
+    //int2 tex_xy = int2(tex_x, tex_y);
 
     //
     // fill local thread storage to reduce bandwith.

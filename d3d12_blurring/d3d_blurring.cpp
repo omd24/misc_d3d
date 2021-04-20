@@ -124,6 +124,7 @@ bool global_paused;
 bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
+BlurFilter * global_blur_filter;
 
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
@@ -702,10 +703,10 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave, BlurFil
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
-    srv_heap_desc.NumDescriptors = _COUNT_TEX + 
+    srv_heap_desc.NumDescriptors = _COUNT_TEX +
         6 +     /* GpuWaves descriptors */
         4 +     /* Blur descriptors     */
-        1 ;     /* imgui descriptor     */
+        1;     /* imgui descriptor     */
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -777,21 +778,21 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave, BlurFil
     // Create GpuWaves descriptors
     //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_waves = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_waves.ptr += 
-        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
+    hcpu_waves.ptr +=
+        (_COUNT_TEX)*render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_waves = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_waves.ptr += 
-        (_COUNT_TEX) * render_ctx->cbv_srv_uav_descriptor_size;
+    hgpu_waves.ptr +=
+        (_COUNT_TEX)*render_ctx->cbv_srv_uav_descriptor_size;
     GpuWaves_BuildDescriptors(wave, hcpu_waves, hgpu_waves, render_ctx->cbv_srv_uav_descriptor_size);
 
     //
     // Create Blur descriptors
     //
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_blur = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_blur.ptr += 
+    hcpu_blur.ptr +=
         (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_blur = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_blur.ptr += 
+    hgpu_blur.ptr +=
         (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     BlurFilter_CreateDescriptors(blur, hcpu_blur, hgpu_blur, render_ctx->cbv_srv_uav_descriptor_size);
 
@@ -1555,7 +1556,7 @@ create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_R
     return barrier;
 }
 static HRESULT
-draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
+draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter) {
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1634,7 +1635,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
         render_ctx->srv_heap,
         &render_ctx->alphatested_treesprites_ritems, frame_index
     );
-    // 4. draw transparent objs
+    // 4. draw gpu waves
     render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
     draw_render_items(
         render_ctx->direct_cmd_list,
@@ -1645,16 +1646,47 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves) {
         &render_ctx->gpu_waves_rtimes, frame_index
     );
 
-    // Imgui draw call
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
-
-    // -- indicate that the backbuffer will now be used to present
+    //
+    // Blur compute work
+    //
+    BlurFilter_Execute(
+        blur_filter, render_ctx->direct_cmd_list,
+        render_ctx->root_signature_postprocessing,
+        render_ctx->psos[LAYER_HOR_BLUR],
+        render_ctx->psos[LAYER_VER_BLUR],
+        render_ctx->render_targets[backbuffer_index],
+        4   /* Blur count */
+    );
+    // -- prepare to copy blurred output to the backbuffer
     D3D12_RESOURCE_BARRIER barrier2 = create_barrier(
         render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PRESENT
+        D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST
     );
     render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier2);
+
+    render_ctx->direct_cmd_list->CopyResource(
+        render_ctx->render_targets[backbuffer_index],
+        blur_filter->blur_map0
+    );
+
+    // -- indicate that the backbuffer will now be used to present
+    //D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
+    //    render_ctx->render_targets[backbuffer_index],
+    //    D3D12_RESOURCE_STATE_COPY_DEST,
+    //    D3D12_RESOURCE_STATE_RENDER_TARGET
+    //);
+    //render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
+
+    //// Imgui draw call
+    //ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
+
+    // -- indicate that the backbuffer will now be used to present
+    D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+        render_ctx->render_targets[backbuffer_index],
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PRESENT
+    );
+    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
 
     // -- finish populating command list
     render_ctx->direct_cmd_list->Close();
@@ -1737,7 +1769,7 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
 }
 static void
-d3d_resize (D3DRenderContext * render_ctx) {
+d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
     int w = global_scene_ctx.width;
     int h = global_scene_ctx.height;
 
@@ -1848,6 +1880,10 @@ d3d_resize (D3DRenderContext * render_ctx) {
         global_scene_ctx.aspect_ratio = static_cast<float>(w) / h;
         XMMATRIX p = DirectX::XMMatrixPerspectiveFovLH(0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
         XMStoreFloat4x4(&global_scene_ctx.proj, p);
+
+        // blur filter resize
+        if (blur)
+            BlurFilter_Resize(blur, w, h);
     }
 }
 static void
@@ -1914,13 +1950,13 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 global_paused = true;
             } else if (wParam == SIZE_MAXIMIZED) {
                 global_paused = false;
-                d3d_resize(_render_ctx);
+                d3d_resize(_render_ctx, global_blur_filter);
             } else if (wParam == SIZE_RESTORED) {
                 // TODO(omid): handle restore from minimize/maximize 
                 if (global_resizing) {
                     // don't do nothing until resizing finished
                 } else {
-                    d3d_resize(_render_ctx);
+                    d3d_resize(_render_ctx, global_blur_filter);
                 }
             }
         }
@@ -1937,7 +1973,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         global_paused = false;
         global_resizing  = false;
         Timer_Start(&global_timer);
-        d3d_resize(_render_ctx);
+        d3d_resize(_render_ctx, global_blur_filter);
     } break;
     case WM_DESTROY: {
         PostQuitMessage(0);
@@ -2009,8 +2045,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Initialization
 
     // Query Adapter (PhysicalDevice)
-    IDXGIFactory * dxgi_factory = nullptr;
+    IDXGIFactory4 * dxgi_factory = nullptr;
     CHECK_AND_FAIL(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&dxgi_factory)));
+    //CHECK_AND_FAIL(CreateDXGIFactory1(IID_PPV_ARGS(&dxgi_factory)));
 
     uint32_t const MaxAdapters = 8;
     IDXGIAdapter * adapters[MaxAdapters] = {};
@@ -2098,7 +2135,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         sampler_desc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
     }
 
-        // Create Swapchain
+    // Create Swapchain
     DXGI_SWAP_CHAIN_DESC swapchain_desc = {};
     swapchain_desc.BufferDesc = backbuffer_desc;
     swapchain_desc.SampleDesc = sampler_desc;
@@ -2110,11 +2147,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     swapchain_desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
     if (render_ctx->cmd_queue)
-        dxgi_factory->CreateSwapChain(render_ctx->cmd_queue, &swapchain_desc, &render_ctx->swapchain);
-
-    // -- to get current backbuffer index
-    //CHECK_AND_FAIL(render_ctx->swapchain->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&render_ctx->swapchain3));
-    //render_ctx->backbuffer_index = render_ctx->swapchain3->GetCurrentBackBufferIndex();
+        CHECK_AND_FAIL(dxgi_factory->CreateSwapChain(render_ctx->cmd_queue, &swapchain_desc, &render_ctx->swapchain));
 
 // ========================================================================================================
 #pragma region Load Textures
@@ -2175,13 +2208,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // Blur Initial Setup
     size_t blur_size = BlurFilter_CalculateRequiredSize();
     BYTE * blur_memory = (BYTE *)::malloc(blur_size);
-    BlurFilter * blur_filter = BlurFilter_Init(
+    global_blur_filter = BlurFilter_Init(
         blur_memory,
         render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
         DXGI_FORMAT_R8G8B8A8_UNORM
     );
 
-    create_descriptor_heaps(render_ctx, waves, blur_filter);
+    create_descriptor_heaps(render_ctx, waves, global_blur_filter);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2598,8 +2631,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     bool beginwnd, sliderf, coloredit;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
+
+    //BlurFilter_Resize(global_blur_filter, global_scene_ctx.width, global_scene_ctx.height);
+    //d3d_resize(render_ctx, global_blur_filter);
     MSG msg = {};
     while (msg.message != WM_QUIT) {
+    //BlurFilter_Resize(global_blur_filter, global_scene_ctx.width, global_scene_ctx.height);
+    //d3d_resize(render_ctx, global_blur_filter);
+
         if (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
@@ -2644,7 +2683,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                CHECK_AND_FAIL(draw_main(render_ctx, waves));
+                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
 
                 // End of the loop updates
@@ -2706,7 +2745,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     render_ctx->root_signature_waves->Release();
     render_ctx->root_signature->Release();
 
-    BlurFilter_Deinit(blur_filter);
+    BlurFilter_Deinit(global_blur_filter);
     ::free(blur_memory);
     GpuWaves_Deinit(waves);
     ::free(wave_memory);

@@ -30,6 +30,8 @@ struct BlurFilter {
     // two for ping-ponging the textures
     ID3D12Resource * blur_map0;
     ID3D12Resource * blur_map1;
+
+    bool new_resources_flag;
 };
 
 size_t
