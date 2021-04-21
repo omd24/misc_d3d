@@ -42,9 +42,7 @@ create_descriptors_internal (BlurFilter * filter) {
 }
 static void
 create_resources_internal (BlurFilter * filter) {
-    // Note, compressed formats cannot be used for UAV.  We get error like:
-    // The format (0x4d, BC3_UNORM)  cannot be bound as an UnorderedAccessView,
-    // or cast to a format that could be bound as an UnorderedAccessView. 
+    // NOTE(omid): compressed formats cannot be used for UAV. 
     // Therefore this format does not support D3D11_BIND_UNORDERED_ACCESS ?
 
     D3D12_RESOURCE_DESC tex_desc = {};
@@ -156,7 +154,11 @@ BlurFilter_Resize (BlurFilter * filter, UINT w, UINT h) {
             filter->width = w;
             filter->height = h;
 
-            create_resources_internal(filter);   // new resources 
+            // prepare for resource RE-creation
+            filter->blur_map1->Release();
+            filter->blur_map0->Release();
+
+            create_resources_internal(filter);   // RE-new resources
             create_descriptors_internal(filter); // new resources so need new descriptors
 
             result = true;
@@ -228,7 +230,6 @@ BlurFilter_Execute (
         barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         /*cmdlist->ResourceBarrier(1, &barrier4);*/         // blur_map1 is already in correct state: D3D12_RESOURCE_STATE_UNORDERED_ACCESS
     }
-
 
     for (UINT i = 0; i < blur_count; ++i) {
         //

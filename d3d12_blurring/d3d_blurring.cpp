@@ -25,6 +25,8 @@
 #error "Define at most one."
 #endif
 
+#define ENABLE_DEARIMGUI
+
 #if defined(_DEBUG)
 #define ENABLE_DEBUG_LAYER 1
 #else
@@ -1570,7 +1572,6 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
     ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
-    CHECK_AND_FAIL(ret);
 
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
@@ -1670,16 +1671,25 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     );
 
     // -- indicate that the backbuffer will now be used to present
-    //D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
-    //    render_ctx->render_targets[backbuffer_index],
-    //    D3D12_RESOURCE_STATE_COPY_DEST,
-    //    D3D12_RESOURCE_STATE_RENDER_TARGET
-    //);
-    //render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
+#if defined(ENABLE_DEARIMGUI)
+    D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
+        render_ctx->render_targets[backbuffer_index],
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_RENDER_TARGET
+    );
+    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
 
-    //// Imgui draw call
-    //ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
+    // Imgui draw call
+    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
 
+    // -- indicate that the backbuffer will now be used to present
+    D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+        render_ctx->render_targets[backbuffer_index],
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PRESENT
+    );
+    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+#else
     // -- indicate that the backbuffer will now be used to present
     D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
         render_ctx->render_targets[backbuffer_index],
@@ -1687,6 +1697,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         D3D12_RESOURCE_STATE_PRESENT
     );
     render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+#endif
 
     // -- finish populating command list
     render_ctx->direct_cmd_list->Close();
@@ -1773,8 +1784,7 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
     int w = global_scene_ctx.width;
     int h = global_scene_ctx.height;
 
-    if (
-        render_ctx &&
+    if (render_ctx &&
         render_ctx->device &&
         render_ctx->direct_cmd_list_alloc &&
         render_ctx->swapchain
@@ -1815,11 +1825,7 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
         depth_stencil_desc.DepthOrArraySize = 1;
         depth_stencil_desc.MipLevels = 1;
 
-        // Correction 11/12/2016: SSAO chapter requires an SRV to the depth buffer to read from 
-        // the depth buffer.  Therefore, because we need to create two views to the same resource:
-        //   1. SRV format: DXGI_FORMAT_R24_UNORM_X8_TYPELESS
-        //   2. DSV Format: DXGI_FORMAT_D24_UNORM_S8_UINT
-        // we need to create the depth buffer resource with a typeless format.  
+        // NOTE(omid): Note that we create the depth buffer resource with a typeless format.  
         depth_stencil_desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
         depth_stencil_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
         depth_stencil_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
@@ -2588,6 +2594,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Imgui Setup
+#if defined(ENABLE_DEARIMGUI)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
@@ -2596,10 +2603,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // calculate imgui cpu & gpu handles on location on srv_heap
     D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */));
+    imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
 
     D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */));
+    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
@@ -2621,6 +2628,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
     //window_flags |= ImGuiWindowFlags_NoResize;
 
+    bool beginwnd, sliderf, coloredit;
+#endif // ENABLE_DEARIMGUI
+
 #pragma endregion
 
         // ========================================================================================================
@@ -2628,22 +2638,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     global_paused = false;
     global_resizing = false;
     global_mouse_active = true;
-    bool beginwnd, sliderf, coloredit;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
 
-    //BlurFilter_Resize(global_blur_filter, global_scene_ctx.width, global_scene_ctx.height);
-    //d3d_resize(render_ctx, global_blur_filter);
     MSG msg = {};
     while (msg.message != WM_QUIT) {
-    //BlurFilter_Resize(global_blur_filter, global_scene_ctx.width, global_scene_ctx.height);
-    //d3d_resize(render_ctx, global_blur_filter);
-
         if (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         } else {
 #pragma region Imgui window
+#if defined(ENABLE_DEARIMGUI)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
@@ -2670,11 +2675,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
             ImGui::End();
             ImGui::Render();
+            
+#endif // ENABLE_DEARIMGUI
 #pragma endregion
-
             Timer_Tick(&global_timer);
 
-            if (!global_paused) {
+            if (/*!global_paused*/true) {
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
                 update_camera(&global_scene_ctx);
 
@@ -2686,12 +2692,16 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
 
+#if defined(ENABLE_DEARIMGUI)
                 // End of the loop updates
                 if (0 == i_curr)
                     render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
                 else if (1 == i_curr)
                     render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
                 global_mouse_active = !(beginwnd || sliderf || coloredit);
+                
+#endif // ENABLE_DEARIMGUI
+
             } else {
                 Sleep(100);
             }
@@ -2703,10 +2713,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Cleanup_And_Debug
     flush_command_queue(render_ctx);
 
+#if defined(ENABLE_DEARIMGUI)
     // Cleanup Imgui
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
+#endif // defined(ENABLE_DEARIMGUI)
 
     // release queuing frame resources
     for (size_t i = 0; i < NUM_QUEUING_FRAMES; i++) {
