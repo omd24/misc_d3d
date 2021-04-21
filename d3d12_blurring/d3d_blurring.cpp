@@ -1558,7 +1558,7 @@ create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_R
     return barrier;
 }
 static HRESULT
-draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter) {
+draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter, UINT blur_count) {
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1647,57 +1647,80 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         &render_ctx->gpu_waves_rtimes, frame_index
     );
 
+    if (blur_count > 0) {
     //
     // Blur compute work
     //
-    BlurFilter_Execute(
-        blur_filter, render_ctx->direct_cmd_list,
-        render_ctx->root_signature_postprocessing,
-        render_ctx->psos[LAYER_HOR_BLUR],
-        render_ctx->psos[LAYER_VER_BLUR],
-        render_ctx->render_targets[backbuffer_index],
-        4   /* Blur count */
-    );
-    // -- prepare to copy blurred output to the backbuffer
-    D3D12_RESOURCE_BARRIER barrier2 = create_barrier(
-        render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST
-    );
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier2);
+        BlurFilter_Execute(
+            blur_filter, render_ctx->direct_cmd_list,
+            render_ctx->root_signature_postprocessing,
+            render_ctx->psos[LAYER_HOR_BLUR],
+            render_ctx->psos[LAYER_VER_BLUR],
+            render_ctx->render_targets[backbuffer_index],
+            blur_count
+        );
+        // -- prepare to copy blurred output to the backbuffer
+        D3D12_RESOURCE_BARRIER barrier2 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier2);
 
-    render_ctx->direct_cmd_list->CopyResource(
-        render_ctx->render_targets[backbuffer_index],
-        blur_filter->blur_map0
-    );
+        render_ctx->direct_cmd_list->CopyResource(
+            render_ctx->render_targets[backbuffer_index],
+            blur_filter->blur_map0
+        );
 
-    // -- indicate that the backbuffer will now be used to present
+        // -- indicate that the backbuffer will now be used to present
 #if defined(ENABLE_DEARIMGUI)
-    D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
-        render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_RENDER_TARGET
-    );
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
+        D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_RENDER_TARGET
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
 
-    // Imgui draw call
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
+        // Imgui draw call
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
 
-    // -- indicate that the backbuffer will now be used to present
-    D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-        render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PRESENT
-    );
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+        // -- indicate that the backbuffer will now be used to present
+        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
 #else
     // -- indicate that the backbuffer will now be used to present
-    D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-        render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PRESENT
-    );
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
 #endif
+    } else {
+#if defined(ENABLE_DEARIMGUI)
+
+        // Imgui draw call
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
+
+        // -- indicate that the backbuffer will now be used to present
+        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+#else
+        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
+            render_ctx->render_targets[backbuffer_index],
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT
+        );
+        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
+#endif
+    }
 
     // -- finish populating command list
     render_ctx->direct_cmd_list->Close();
@@ -2628,8 +2651,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
     //window_flags |= ImGuiWindowFlags_NoResize;
 
-    bool beginwnd, sliderf, coloredit;
+    bool beginwnd, sliderf, coloredit, sliderint;
+
+    int i_box_mat = 0;
 #endif // ENABLE_DEARIMGUI
+    int blur_count = 0;
 
 #pragma endregion
 
@@ -2666,8 +2692,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
             coloredit = ImGui::IsItemActive();
 
-            static int i_curr = 0;
-            ImGui::Combo("Box Material", &i_curr, "   Wood\0   Wire-fenced\0\0");
+            ImGui::Combo("Box Material", &i_box_mat, "   Wood\0   Wire-fenced\0\0");
+
+            ImGui::SliderInt(
+                "Blur Count",
+                &blur_count,
+                0,
+                10
+            );
+            sliderint = ImGui::IsItemActive();
 
             ImGui::Text("\n\n");
             ImGui::Separator();
@@ -2675,7 +2708,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
             ImGui::End();
             ImGui::Render();
-            
+
 #endif // ENABLE_DEARIMGUI
 #pragma endregion
             Timer_Tick(&global_timer);
@@ -2689,17 +2722,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter));
+                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
 
 #if defined(ENABLE_DEARIMGUI)
                 // End of the loop updates
-                if (0 == i_curr)
+                if (0 == i_box_mat)
                     render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-                else if (1 == i_curr)
+                else if (1 == i_box_mat)
                     render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
-                global_mouse_active = !(beginwnd || sliderf || coloredit);
-                
+                global_mouse_active = !(beginwnd || sliderf || coloredit || sliderint);
+
 #endif // ENABLE_DEARIMGUI
 
             } else {

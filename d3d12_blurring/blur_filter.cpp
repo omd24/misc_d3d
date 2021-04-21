@@ -176,121 +176,123 @@ BlurFilter_Execute (
     ID3D12Resource * input_tex,
     UINT blur_count
 ) {
-    cmdlist->SetComputeRootSignature(root_sig);
+    if (blur_count > 0) {
+        cmdlist->SetComputeRootSignature(root_sig);
 
-    cmdlist->SetComputeRoot32BitConstants(0, 1, &filter->blur_radius, 0);
-    cmdlist->SetComputeRoot32BitConstants(0, (UINT)filter->weight_count, filter->weights, 1);
+        cmdlist->SetComputeRoot32BitConstants(0, 1, &filter->blur_radius, 0);
+        cmdlist->SetComputeRoot32BitConstants(0, (UINT)filter->weight_count, filter->weights, 1);
 
-    D3D12_RESOURCE_BARRIER barrier1 = {};
-    barrier1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier1.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier1.Transition.pResource = input_tex;
-    barrier1.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET; // input is backbuffer
-    barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cmdlist->ResourceBarrier(1, &barrier1);
+        D3D12_RESOURCE_BARRIER barrier1 = {};
+        barrier1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier1.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier1.Transition.pResource = input_tex;
+        barrier1.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET; // input is backbuffer
+        barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdlist->ResourceBarrier(1, &barrier1);
 
-    D3D12_RESOURCE_BARRIER barrier2 = {};
-    barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier2.Transition.pResource = filter->blur_map0;
-    barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    if (filter->new_resources_flag) {
-        barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-        cmdlist->ResourceBarrier(1, &barrier2);
-    } else {
-        barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
-        cmdlist->ResourceBarrier(1, &barrier2);
-    }
+        D3D12_RESOURCE_BARRIER barrier2 = {};
+        barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier2.Transition.pResource = filter->blur_map0;
+        barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        if (filter->new_resources_flag) {
+            barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            cmdlist->ResourceBarrier(1, &barrier2);
+        } else {
+            barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
+            cmdlist->ResourceBarrier(1, &barrier2);
+        }
 
-    // copy input (here backbuffer) to blur_map0
-    cmdlist->CopyResource(filter->blur_map0, input_tex);
+        // copy input (here backbuffer) to blur_map0
+        cmdlist->CopyResource(filter->blur_map0, input_tex);
 
-    D3D12_RESOURCE_BARRIER barrier3 = {};
-    barrier3.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier3.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier3.Transition.pResource = filter->blur_map0;
-    barrier3.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier3.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-    barrier3.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cmdlist->ResourceBarrier(1, &barrier3);
+        D3D12_RESOURCE_BARRIER barrier3 = {};
+        barrier3.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier3.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier3.Transition.pResource = filter->blur_map0;
+        barrier3.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier3.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+        barrier3.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdlist->ResourceBarrier(1, &barrier3);
 
-    D3D12_RESOURCE_BARRIER barrier4 = {};
-    barrier4.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier4.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier4.Transition.pResource = filter->blur_map1;
-    barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier4.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier4.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    if (filter->new_resources_flag) {
+        D3D12_RESOURCE_BARRIER barrier4 = {};
+        barrier4.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier4.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier4.Transition.pResource = filter->blur_map1;
         barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-        cmdlist->ResourceBarrier(1, &barrier4);
-    } else {
-        barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        /*cmdlist->ResourceBarrier(1, &barrier4);*/         // blur_map1 is already in correct state: D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-    }
+        barrier4.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barrier4.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        if (filter->new_resources_flag) {
+            barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            cmdlist->ResourceBarrier(1, &barrier4);
+        } else {
+            barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            /*cmdlist->ResourceBarrier(1, &barrier4);*/         // blur_map1 is already in correct state: D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+        }
 
-    for (UINT i = 0; i < blur_count; ++i) {
-        //
-        // Horizontal Blur Pass
-        //
-        cmdlist->SetPipelineState(hor_blur_pso);
+        for (UINT i = 0; i < blur_count; ++i) {
+            //
+            // Horizontal Blur Pass
+            //
+            cmdlist->SetPipelineState(hor_blur_pso);
 
-        cmdlist->SetComputeRootDescriptorTable(1, filter->blur0_gpu_srv);
-        cmdlist->SetComputeRootDescriptorTable(2, filter->blur1_gpu_uav);
+            cmdlist->SetComputeRootDescriptorTable(1, filter->blur0_gpu_srv);
+            cmdlist->SetComputeRootDescriptorTable(2, filter->blur1_gpu_uav);
 
-        // how many groups to dispatch
-        UINT ngroup_x = (UINT)ceilf(filter->width / 256.0f);
-        cmdlist->Dispatch(ngroup_x, filter->height, 1);
+            // how many groups to dispatch
+            UINT ngroup_x = (UINT)ceilf(filter->width / 256.0f);
+            cmdlist->Dispatch(ngroup_x, filter->height, 1);
 
-        D3D12_RESOURCE_BARRIER barrier5 = {};
-        barrier5.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier5.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier5.Transition.pResource = filter->blur_map0;
-        barrier5.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier5.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier5.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cmdlist->ResourceBarrier(1, &barrier5);
+            D3D12_RESOURCE_BARRIER barrier5 = {};
+            barrier5.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier5.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier5.Transition.pResource = filter->blur_map0;
+            barrier5.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
+            barrier5.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barrier5.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cmdlist->ResourceBarrier(1, &barrier5);
 
-        D3D12_RESOURCE_BARRIER barrier6 = {};
-        barrier6.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier6.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier6.Transition.pResource = filter->blur_map1;
-        barrier6.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier6.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier6.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cmdlist->ResourceBarrier(1, &barrier6);
-        //
-        // Vertical Blur Pass
-        //
-        cmdlist->SetPipelineState(ver_blur_pso);
+            D3D12_RESOURCE_BARRIER barrier6 = {};
+            barrier6.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier6.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier6.Transition.pResource = filter->blur_map1;
+            barrier6.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barrier6.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+            barrier6.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cmdlist->ResourceBarrier(1, &barrier6);
+            //
+            // Vertical Blur Pass
+            //
+            cmdlist->SetPipelineState(ver_blur_pso);
 
-        cmdlist->SetComputeRootDescriptorTable(1, filter->blur1_gpu_srv);
-        cmdlist->SetComputeRootDescriptorTable(2, filter->blur0_gpu_uav);
+            cmdlist->SetComputeRootDescriptorTable(1, filter->blur1_gpu_srv);
+            cmdlist->SetComputeRootDescriptorTable(2, filter->blur0_gpu_uav);
 
-        // how many groups to dispatch
-        UINT ngroup_y = (UINT)ceilf(filter->height / 256.0f);
-        cmdlist->Dispatch(filter->width, ngroup_y, 1);
+            // how many groups to dispatch
+            UINT ngroup_y = (UINT)ceilf(filter->height / 256.0f);
+            cmdlist->Dispatch(filter->width, ngroup_y, 1);
 
-        D3D12_RESOURCE_BARRIER barrier7 = {};
-        barrier7.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier7.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier7.Transition.pResource = filter->blur_map0;
-        barrier7.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier7.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier7.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cmdlist->ResourceBarrier(1, &barrier7);
+            D3D12_RESOURCE_BARRIER barrier7 = {};
+            barrier7.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier7.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier7.Transition.pResource = filter->blur_map0;
+            barrier7.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barrier7.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+            barrier7.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cmdlist->ResourceBarrier(1, &barrier7);
 
-        D3D12_RESOURCE_BARRIER barrier8 = {};
-        barrier8.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier8.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier8.Transition.pResource = filter->blur_map1;
-        barrier8.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier8.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier8.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cmdlist->ResourceBarrier(1, &barrier8);
+            D3D12_RESOURCE_BARRIER barrier8 = {};
+            barrier8.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier8.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier8.Transition.pResource = filter->blur_map1;
+            barrier8.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
+            barrier8.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            barrier8.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cmdlist->ResourceBarrier(1, &barrier8);
 
-        filter->new_resources_flag = false;
+            filter->new_resources_flag = false;
+        }
     }
 }
