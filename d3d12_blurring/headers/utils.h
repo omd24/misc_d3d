@@ -542,6 +542,31 @@ create_default_buffer (
     // The caller can Release the upload_buffer after it knows the copy has been executed.
 
 }
+static D3D12_RESOURCE_BARRIER
+create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    barrier.Transition.pResource = resource;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = before;
+    barrier.Transition.StateAfter = after;
+    return barrier;
+}
+/*
+    Notifies the driver that it needs to synchronize multiple accesses to resource
+    i.e, specify transition between two usages through a transition barrier
+*/
+inline void
+resource_usage_transition (
+    ID3D12GraphicsCommandList * cmdlist,
+    ID3D12Resource * resource,
+    D3D12_RESOURCE_STATES before,
+    D3D12_RESOURCE_STATES after
+) {
+    D3D12_RESOURCE_BARRIER barrier = create_barrier(resource, before, after);
+    cmdlist->ResourceBarrier(1, &barrier);
+}
 
 inline XMVECTOR
 spherical_to_cartesian (float radius, float theta, float phi) {

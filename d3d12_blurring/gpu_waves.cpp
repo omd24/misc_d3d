@@ -104,53 +104,15 @@ GpuWaves_Init (BYTE * memory, ID3D12GraphicsCommandList* cmdlist, ID3D12Device *
     // Schedule to copy data to the default resource and change states
     // curr_sol should be GENERIC_READ so it can be read by vertex shader
     //
-    D3D12_RESOURCE_BARRIER barrier1 = {};
-    barrier1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier1.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier1.Transition.pResource = ret->prev_sol;
-    barrier1.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    D3D12_RESOURCE_BARRIER barrier2 = {};
-    barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier2.Transition.pResource = ret->prev_sol;
-    barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    cmdlist->ResourceBarrier(1, &barrier1);
+    resource_usage_transition(cmdlist, ret->prev_sol, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
     update_subresources_heap(cmdlist, ret->prev_sol, ret->prev_upload_buffer, 0, 0, num_2dsubresources, &subresource_data);
-    cmdlist->ResourceBarrier(1, &barrier2);
+    resource_usage_transition(cmdlist, ret->prev_sol, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    D3D12_RESOURCE_BARRIER barrier3 = {};
-    barrier3.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier3.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier3.Transition.pResource = ret->curr_sol;
-    barrier3.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier3.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier3.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    D3D12_RESOURCE_BARRIER barrier4 = {};
-    barrier4.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier4.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier4.Transition.pResource = ret->curr_sol;
-    barrier4.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier4.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-    barrier4.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    cmdlist->ResourceBarrier(1, &barrier3);
+    resource_usage_transition(cmdlist, ret->curr_sol, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
     update_subresources_heap(cmdlist, ret->curr_sol, ret->curr_upload_buffer, 0, 0, num_2dsubresources, &subresource_data);
-    cmdlist->ResourceBarrier(1, &barrier4);
+    resource_usage_transition(cmdlist, ret->curr_sol, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-    D3D12_RESOURCE_BARRIER barrier5 = {};
-    barrier5.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier5.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier5.Transition.pResource = ret->next_sol;
-    barrier5.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier5.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier5.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    cmdlist->ResourceBarrier(1, &barrier5);
+    resource_usage_transition(cmdlist, ret->next_sol, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ::free(init_data);
 #pragma endregion
     return ret;
@@ -232,15 +194,7 @@ GpuWaves_Update (
         UINT ngroup_x = wave->ncol / 16;
         UINT ngroup_y = wave->nrow / 16;
 
-        D3D12_RESOURCE_BARRIER barrier1 = {};
-        barrier1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier1.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier1.Transition.pResource = wave->curr_sol;
-        barrier1.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-        cmdlist->ResourceBarrier(1, &barrier1);
+        resource_usage_transition(cmdlist, wave->curr_sol, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         cmdlist->Dispatch(ngroup_x, ngroup_y, 1);
 
         //
@@ -267,16 +221,8 @@ GpuWaves_Update (
 
         t = 0.0f; // reset time
 
-        D3D12_RESOURCE_BARRIER barrier2 = {};
-        barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier2.Transition.pResource = wave->curr_sol;
-        barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-        barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
         // curr_sol should be GENERIC_READ so it can be read by vertex shader
-        cmdlist->ResourceBarrier(1, &barrier2);
+        resource_usage_transition(cmdlist, wave->curr_sol, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_GENERIC_READ);
     }
 }
 void
@@ -299,28 +245,13 @@ GpuWaves_Disturb (
     // the curr sol is in GENERIC_READ state so it can be read by vertex shader
     // change it to UNORDERED_ACCESS for the compute shader.
     // Note that a uav can still be read in a compute shader
-    D3D12_RESOURCE_BARRIER barrier1 = {};
-    barrier1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier1.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier1.Transition.pResource = wave->curr_sol;
-    barrier1.Transition.StateBefore = D3D12_RESOURCE_STATE_GENERIC_READ;
-    barrier1.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier1.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    resource_usage_transition(cmdlist, wave->curr_sol, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    cmdlist->ResourceBarrier(1, &barrier1);
     // One thread group kicks off one thread, which displaces the height of one
     // vertex and its neighbors.
     cmdlist->Dispatch(1, 1, 1);
 
-    D3D12_RESOURCE_BARRIER barrier2 = {};
-    barrier2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier2.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier2.Transition.pResource = wave->curr_sol;
-    barrier2.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    barrier2.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
-    barrier2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    cmdlist->ResourceBarrier(1, &barrier2);
+    resource_usage_transition(cmdlist, wave->curr_sol, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_GENERIC_READ);
 }
 void
 GpuWaves_Deinit (GpuWaves * wave) {

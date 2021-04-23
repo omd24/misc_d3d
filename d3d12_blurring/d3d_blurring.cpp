@@ -25,13 +25,13 @@
 #error "Define at most one."
 #endif
 
-#define ENABLE_DEARIMGUI
-
 #if defined(_DEBUG)
 #define ENABLE_DEBUG_LAYER 1
 #else
 #define ENABLE_DEBUG_LAYER 0
 #endif
+
+#define ENABLE_DEARIMGUI
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
 #pragma warning (disable: 6011)     // dereferencing a potentially null pointer
@@ -127,6 +127,13 @@ bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
 BlurFilter * global_blur_filter;
+
+#if defined(ENABLE_DEARIMGUI)
+bool global_imgui_enabled = true;
+#else
+bool global_imgui_enabled = false;
+#endif // defined(ENABLE_DEARIMGUI)
+
 
 struct RenderItemArray {
     RenderItem  ritems[_COUNT_RENDERITEM];
@@ -244,20 +251,17 @@ load_texture (
         IID_PPV_ARGS(&out_texture->upload_heap)
     );
 
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource = out_texture->resource;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
     // Use Heap-allocating UpdateSubresources implementation for variable number of subresources (which is the case for textures).
     update_subresources_heap(
         cmd_list, out_texture->resource, out_texture->upload_heap,
         0, 0, n_subresources, subresources
     );
-    cmd_list->ResourceBarrier(1, &barrier);
+
+    resource_usage_transition(
+        cmd_list, out_texture->resource,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+    );
 
     ::free(subresources);
     ::free(ddsData);
@@ -1546,22 +1550,13 @@ flush_command_queue (D3DRenderContext * render_ctx) {
         }
     }
 }
-static D3D12_RESOURCE_BARRIER
-create_barrier (ID3D12Resource * resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    return barrier;
-}
 static HRESULT
 draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter, UINT blur_count) {
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
+    ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
+    ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
 
     // Populate command list
 
@@ -1571,45 +1566,46 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     // When ExecuteCommandList() is called on a particular command 
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
-    ret = render_ctx->direct_cmd_list->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
+    ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
 
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
-    render_ctx->direct_cmd_list->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
+    cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
 
     update_waves_gpu(waves, render_ctx, &global_timer);
 
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
 
     // -- set viewport and scissor
-    render_ctx->direct_cmd_list->RSSetViewports(1, &render_ctx->viewport);
-    render_ctx->direct_cmd_list->RSSetScissorRects(1, &render_ctx->scissor_rect);
+    cmdlist->RSSetViewports(1, &render_ctx->viewport);
+    cmdlist->RSSetScissorRects(1, &render_ctx->scissor_rect);
 
     // -- indicate that the backbuffer will be used as the render target
-    D3D12_RESOURCE_BARRIER barrier1 = create_barrier(
-        render_ctx->render_targets[backbuffer_index],
-        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET
+    resource_usage_transition(
+        cmdlist,
+        backbuffer,
+        D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_RENDER_TARGET
     );
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier1);
 
     // -- get CPU descriptor handle that represents the start of the rtv heap
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     rtv_handle.ptr = SIZE_T(INT64(rtv_handle.ptr) + INT64(render_ctx->backbuffer_index) * INT64(render_ctx->rtv_descriptor_size));    // -- apply initial offset
 
-    render_ctx->direct_cmd_list->ClearRenderTargetView(rtv_handle, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
-    render_ctx->direct_cmd_list->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-    render_ctx->direct_cmd_list->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
+    cmdlist->ClearRenderTargetView(rtv_handle, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
+    cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+    cmdlist->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
 
-    render_ctx->direct_cmd_list->SetGraphicsRootSignature(render_ctx->root_signature);
+    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
 
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
-    render_ctx->direct_cmd_list->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
-    render_ctx->direct_cmd_list->SetGraphicsRootDescriptorTable(4, waves->curr_sol_srv); // set displacement map
+    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
+    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_srv); // set displacement map
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
-        render_ctx->direct_cmd_list,
+        cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
@@ -1617,9 +1613,9 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         &render_ctx->opaque_ritems, frame_index
     );
     // 2. draw alpha-tested box/crate
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
     draw_render_items(
-        render_ctx->direct_cmd_list,
+        cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
@@ -1627,9 +1623,9 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         &render_ctx->alphatested_ritems, frame_index
     );
     // 3. draw tree-sprites
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
     draw_render_items(
-        render_ctx->direct_cmd_list,
+        cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
@@ -1637,9 +1633,9 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         &render_ctx->alphatested_treesprites_ritems, frame_index
     );
     // 4. draw gpu waves
-    render_ctx->direct_cmd_list->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
     draw_render_items(
-        render_ctx->direct_cmd_list,
+        cmdlist,
         render_ctx->frame_resources[frame_index].obj_cb,
         render_ctx->frame_resources[frame_index].mat_cb,
         render_ctx->cbv_srv_uav_descriptor_size,
@@ -1648,86 +1644,45 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     );
 
     if (blur_count > 0) {
-    //
-    // Blur compute work
-    //
+        //
+        // Blur compute work
+        //
         BlurFilter_Execute(
-            blur_filter, render_ctx->direct_cmd_list,
+            blur_filter, cmdlist,
             render_ctx->root_signature_postprocessing,
             render_ctx->psos[LAYER_HOR_BLUR],
             render_ctx->psos[LAYER_VER_BLUR],
-            render_ctx->render_targets[backbuffer_index],
+            backbuffer,
             blur_count
         );
         // -- prepare to copy blurred output to the backbuffer
-        D3D12_RESOURCE_BARRIER barrier2 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier2);
+        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
 
-        render_ctx->direct_cmd_list->CopyResource(
-            render_ctx->render_targets[backbuffer_index],
+        cmdlist->CopyResource(
+            backbuffer,
             blur_filter->blur_map0
         );
 
-        // -- indicate that the backbuffer will now be used to present
-#if defined(ENABLE_DEARIMGUI)
-        D3D12_RESOURCE_BARRIER barrier3 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_RENDER_TARGET
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier3);
-
-        // Imgui draw call
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
-
-        // -- indicate that the backbuffer will now be used to present
-        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PRESENT
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
-#else
-    // -- indicate that the backbuffer will now be used to present
-        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PRESENT
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
-#endif
-    } else {
-#if defined(ENABLE_DEARIMGUI)
-
-        // Imgui draw call
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), render_ctx->direct_cmd_list);
+        if (global_imgui_enabled) {
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        } else {
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+        }
+    } else if (blur_count == 0) {
+        if (global_imgui_enabled)
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
         // -- indicate that the backbuffer will now be used to present
-        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PRESENT
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
-#else
-        D3D12_RESOURCE_BARRIER barrier4 = create_barrier(
-            render_ctx->render_targets[backbuffer_index],
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PRESENT
-        );
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &barrier4);
-#endif
+        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     }
 
     // -- finish populating command list
-    render_ctx->direct_cmd_list->Close();
+    cmdlist->Close();
 
-    ID3D12CommandList * cmd_lists [] = {render_ctx->direct_cmd_list};
+    ID3D12CommandList * cmd_lists [] = {cmdlist};
     render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
-
 
     render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
 
@@ -1884,8 +1839,7 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
         render_ctx->device->CreateDepthStencilView(render_ctx->depth_stencil_buffer, &dsv_desc, render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart());
 
         // Transition the resource from its initial state to be used as a depth buffer.
-        D3D12_RESOURCE_BARRIER ds_barrier = create_barrier(render_ctx->depth_stencil_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        render_ctx->direct_cmd_list->ResourceBarrier(1, &ds_barrier);
+        resource_usage_transition(render_ctx->direct_cmd_list, render_ctx->depth_stencil_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
         // Execute the resize commands.
         render_ctx->direct_cmd_list->Close();
@@ -2586,8 +2540,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion Shapes_And_Renderitem_Creation
 
     // NOTE(omid): Before closing/executing command list specify the depth-stencil-buffer transition from its initial state to be used as a depth buffer.
-    D3D12_RESOURCE_BARRIER ds_barrier = create_barrier(render_ctx->depth_stencil_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-    render_ctx->direct_cmd_list->ResourceBarrier(1, &ds_barrier);
+    resource_usage_transition(render_ctx->direct_cmd_list, render_ctx->depth_stencil_buffer, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     // -- close the command list and execute it to begin inital gpu setup
     CHECK_AND_FAIL(render_ctx->direct_cmd_list->Close());
@@ -2617,46 +2570,44 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Imgui Setup
-#if defined(ENABLE_DEARIMGUI)
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.Fonts->AddFontDefault();
-    ImGui::StyleColorsDark();
-
-    // calculate imgui cpu & gpu handles on location on srv_heap
-    D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
-
-    D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
-
-    // Setup Platform/Renderer backends
-    ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX12_Init(
-        render_ctx->device, NUM_QUEUING_FRAMES,
-        render_ctx->backbuffer_format, render_ctx->srv_heap,
-        imgui_cpu_handle,
-        imgui_gpu_handle
-    );
-
-    // Setup imgui variables
     bool * ptr_open = nullptr;
     ImGuiWindowFlags window_flags = 0;
-    window_flags |= ImGuiWindowFlags_NoScrollbar;
-    window_flags |= ImGuiWindowFlags_MenuBar;
-    //window_flags |= ImGuiWindowFlags_NoMove;
-    window_flags |= ImGuiWindowFlags_NoCollapse;
-    window_flags |= ImGuiWindowFlags_NoNav;
-    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
-    //window_flags |= ImGuiWindowFlags_NoResize;
-
     bool beginwnd, sliderf, coloredit, sliderint;
-
     int i_box_mat = 0;
-#endif // ENABLE_DEARIMGUI
     int blur_count = 0;
+    if (global_imgui_enabled) {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        io.Fonts->AddFontDefault();
+        ImGui::StyleColorsDark();
 
+        // calculate imgui cpu & gpu handles on location on srv_heap
+        D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
+
+        D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
+
+        // Setup Platform/Renderer backends
+        ImGui_ImplWin32_Init(hwnd);
+        ImGui_ImplDX12_Init(
+            render_ctx->device, NUM_QUEUING_FRAMES,
+            render_ctx->backbuffer_format, render_ctx->srv_heap,
+            imgui_cpu_handle,
+            imgui_gpu_handle
+        );
+
+        // Setup imgui window flags
+        window_flags |= ImGuiWindowFlags_NoScrollbar;
+        window_flags |= ImGuiWindowFlags_MenuBar;
+        //window_flags |= ImGuiWindowFlags_NoMove;
+        window_flags |= ImGuiWindowFlags_NoCollapse;
+        window_flags |= ImGuiWindowFlags_NoNav;
+        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
+        //window_flags |= ImGuiWindowFlags_NoResize;
+
+    }
 #pragma endregion
 
         // ========================================================================================================
@@ -2674,42 +2625,49 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             DispatchMessageA(&msg);
         } else {
 #pragma region Imgui window
-#if defined(ENABLE_DEARIMGUI)
-            ImGui_ImplDX12_NewFrame();
-            ImGui_ImplWin32_NewFrame();
-            ImGui::NewFrame();
-            ImGui::Begin("Settings", ptr_open, window_flags);
-            beginwnd = ImGui::IsItemActive();
+            if (global_imgui_enabled) {
+                ImGui_ImplDX12_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+                ImGui::Begin("Settings", ptr_open, window_flags);
+                beginwnd = ImGui::IsItemActive();
 
-            ImGui::SliderFloat(
-                "Fog Distance",
-                &render_ctx->main_pass_constants.fog_start,
-                5.0f,
-                150.0f
-            );
-            sliderf = ImGui::IsItemActive();
+                ImGui::SliderFloat(
+                    "Fog Distance",
+                    &render_ctx->main_pass_constants.fog_start,
+                    5.0f,
+                    150.0f
+                );
+                sliderf = ImGui::IsItemActive();
 
-            ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
-            coloredit = ImGui::IsItemActive();
+                ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
+                coloredit = ImGui::IsItemActive();
 
-            ImGui::Combo("Box Material", &i_box_mat, "   Wood\0   Wire-fenced\0\0");
+                ImGui::Combo("Box Material", &i_box_mat, "   Wood\0   Wire-fenced\0\0");
 
-            ImGui::SliderInt(
-                "Blur Count",
-                &blur_count,
-                0,
-                10
-            );
-            sliderint = ImGui::IsItemActive();
+                ImGui::SliderInt(
+                    "Blur Count",
+                    &blur_count,
+                    0,
+                    10
+                );
+                sliderint = ImGui::IsItemActive();
 
-            ImGui::Text("\n\n");
-            ImGui::Separator();
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+                ImGui::Text("\n\n");
+                ImGui::Separator();
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
-            ImGui::End();
-            ImGui::Render();
+                ImGui::End();
+                ImGui::Render();
 
-#endif // ENABLE_DEARIMGUI
+                // choose box material
+                if (0 == i_box_mat)
+                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
+                else if (1 == i_box_mat)
+                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
+                // control mouse activation
+                global_mouse_active = !(beginwnd || sliderf || coloredit || sliderint);
+            }
 #pragma endregion
             Timer_Tick(&global_timer);
 
@@ -2724,17 +2682,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
                 CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
-
-#if defined(ENABLE_DEARIMGUI)
-                // End of the loop updates
-                if (0 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-                else if (1 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
-                global_mouse_active = !(beginwnd || sliderf || coloredit || sliderint);
-
-#endif // ENABLE_DEARIMGUI
-
             } else {
                 Sleep(100);
             }
@@ -2746,12 +2693,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Cleanup_And_Debug
     flush_command_queue(render_ctx);
 
-#if defined(ENABLE_DEARIMGUI)
     // Cleanup Imgui
-    ImGui_ImplDX12_Shutdown();
-    ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
-#endif // defined(ENABLE_DEARIMGUI)
+    if (global_imgui_enabled) {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+    }
 
     // release queuing frame resources
     for (size_t i = 0; i < NUM_QUEUING_FRAMES; i++) {
