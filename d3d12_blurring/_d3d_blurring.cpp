@@ -10,8 +10,10 @@
 #include "headers/game_timer.h"
 #include "headers/dds_loader.h"
 
+#include "offscreen_render_target.h"
 #include "gpu_waves.h"
 #include "blur_filter.h"
+#include "sobel_filter.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_win32.h>
@@ -31,7 +33,7 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_DEARIMGUI
+//#define ENABLE_DEARIMGUI
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
 #pragma warning (disable: 6011)     // dereferencing a potentially null pointer
@@ -50,6 +52,8 @@ enum RENDER_LAYER : int {
     LAYER_GPU_WAVES_UPDATE = 6,
     LAYER_HOR_BLUR = 7,
     LAYER_VER_BLUR = 8,
+    LAYER_SOBEL = 9,
+    LAYER_COMPISITE = 10,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
@@ -127,6 +131,8 @@ bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
 BlurFilter * global_blur_filter;
+SobelFilter global_sobel_filter = {};
+OffscreenRenderTarget global_offscreen_rendertarget = {};
 
 #if defined(ENABLE_DEARIMGUI)
 bool global_imgui_enabled = true;
@@ -158,7 +164,8 @@ struct D3DRenderContext {
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
     ID3D12RootSignature *           root_signature_waves;
-    ID3D12RootSignature *           root_signature_postprocessing;
+    ID3D12RootSignature *           root_signature_postprocessing_blur;
+    ID3D12RootSignature *           root_signature_postprocessing_sobel;
     ID3D12PipelineState *           psos[_COUNT_RENDERCOMPUTE_LAYER];
 
     // Command objects
@@ -705,14 +712,21 @@ draw_render_items (
     }
 }
 static void
-create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave, BlurFilter * blur) {
+create_descriptor_heaps (
+    D3DRenderContext * render_ctx,
+    GpuWaves * wave,
+    BlurFilter * blur, SobelFilter * sobel,
+    OffscreenRenderTarget * ort
+) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors = _COUNT_TEX +
         6 +     /* GpuWaves descriptors */
         4 +     /* Blur descriptors     */
-        1;     /* imgui descriptor     */
+        2 +     /* Sobel descriptors    */
+        1 +     /* Offscreen RenderTarget descriptor */
+        1;      /* imgui descriptor     */
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     render_ctx->device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&render_ctx->srv_heap));
@@ -802,12 +816,39 @@ create_descriptor_heaps (D3DRenderContext * render_ctx, GpuWaves * wave, BlurFil
         (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     BlurFilter_CreateDescriptors(blur, hcpu_blur, hgpu_blur, render_ctx->cbv_srv_uav_descriptor_size);
 
+
+    //
+    // Create Sobel Descriptors
+    //
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_sobel = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_sobel.ptr +=
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_sobel = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    hgpu_sobel.ptr +=
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    SobelFilter_CreateDescriptors(sobel, hcpu_sobel, hgpu_sobel, render_ctx->cbv_srv_uav_descriptor_size);
+
+
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
     rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS;
     rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
+
+    //
+    // Create Offscreen RenderTarget descriptors
+    //
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_offscreen_rt = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_offscreen_rt.ptr +=
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_offscreen_rt = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
+    hgpu_offscreen_rt.ptr +=
+        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
+    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    hcpu_rtv.ptr +=
+        (NUM_BACKBUFFERS) * render_ctx->rtv_descriptor_size;
+    OffscreenRenderTarget_CreateDescriptors(ort, hcpu_offscreen_rt, hgpu_offscreen_rt, hcpu_rtv);
 
     // Create Depth Stencil View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc;
@@ -1046,7 +1087,7 @@ create_root_signature_gpuwaves (ID3D12Device * device, ID3D12RootSignature ** wa
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(wave_root_signature));
 }
 static void
-create_root_signature_postprocessing (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
+create_root_signature_postprocessing_blur (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
 
     D3D12_DESCRIPTOR_RANGE srv_table = {};
     srv_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -1102,6 +1143,71 @@ create_root_signature_postprocessing (ID3D12Device * device, ID3D12RootSignature
     );
 }
 static void
+create_root_signature_postprocessing_sobel (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
+
+    D3D12_DESCRIPTOR_RANGE srv_table0 = {};
+    srv_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srv_table0.NumDescriptors = 1;
+    srv_table0.BaseShaderRegister = 0;
+    srv_table0.RegisterSpace = 0;
+    srv_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE srv_table1 = {};
+    srv_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srv_table1.NumDescriptors = 1;
+    srv_table1.BaseShaderRegister = 1;
+    srv_table1.RegisterSpace = 0;
+    srv_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uav_table = {};
+    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uav_table.NumDescriptors = 1;
+    uav_table.BaseShaderRegister = 0;
+    uav_table.RegisterSpace = 0;
+    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
+    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
+    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[0].DescriptorTable.pDescriptorRanges = &srv_table0;
+    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table1;
+    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
+    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
+    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
+    get_static_samplers(samplers);
+
+    // A root signature is an array of root parameters.
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = _countof(slot_root_params);
+    root_sig_desc.pParameters = slot_root_params;
+    root_sig_desc.NumStaticSamplers = _COUNT_SAMPLER;
+    root_sig_desc.pStaticSamplers = samplers;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ID3DBlob * serialized_root_sig = nullptr;
+    ID3DBlob * error_blob = nullptr;
+    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
+
+    if (error_blob) {
+        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
+    }
+
+    device->CreateRootSignature(
+        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
+        IID_PPV_ARGS(postprocessing_root_signature)
+    );
+}
+static void
 create_pso (
     D3DRenderContext * render_ctx,
     IDxcBlob * vertex_shader_code_std,
@@ -1114,7 +1220,10 @@ create_pso (
     IDxcBlob * compute_shader_code_update_wave,
     IDxcBlob * compute_shader_code_disturb_wave,
     IDxcBlob * compute_shader_code_hor_blur,
-    IDxcBlob * compute_shader_code_ver_blur
+    IDxcBlob * compute_shader_code_ver_blur,
+    IDxcBlob * vertex_shader_code_composite,
+    IDxcBlob * pixel_shader_code_composite,
+    IDxcBlob * compute_shader_code_sobel
 ) {
     // -- Create vertex-input-layout Elements
 
@@ -1293,7 +1402,7 @@ create_pso (
     // -- Create PSO for horizontal blur
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC hor_blur_pso = {};
-    hor_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing;
+    hor_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
     hor_blur_pso.CS.pShaderBytecode = compute_shader_code_hor_blur->GetBufferPointer();
     hor_blur_pso.CS.BytecodeLength = compute_shader_code_hor_blur->GetBufferSize();
     hor_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
@@ -1302,11 +1411,40 @@ create_pso (
     // -- Create PSO for vertical blur
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC ver_blur_pso = {};
-    ver_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing;
+    ver_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
     ver_blur_pso.CS.pShaderBytecode = compute_shader_code_ver_blur->GetBufferPointer();
     ver_blur_pso.CS.BytecodeLength = compute_shader_code_ver_blur->GetBufferSize();
     ver_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&ver_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_VER_BLUR]));
+
+    //
+    // -- Create PSO for compositing post process
+    //
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC composite_pso = opaque_pso_desc;
+    composite_pso.pRootSignature = render_ctx->root_signature_postprocessing_sobel;
+
+    // disable depth test
+    composite_pso.DepthStencilState.DepthEnable = false;
+    composite_pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    composite_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    composite_pso.VS.pShaderBytecode = vertex_shader_code_composite->GetBufferPointer();
+    composite_pso.VS.BytecodeLength = vertex_shader_code_composite->GetBufferSize();
+
+    composite_pso.PS.pShaderBytecode = pixel_shader_code_composite->GetBufferPointer();
+    composite_pso.PS.BytecodeLength = pixel_shader_code_composite->GetBufferSize();
+
+    render_ctx->device->CreateGraphicsPipelineState(&composite_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_COMPISITE]));
+
+    //
+    // -- Create PSO for sobel filter
+    //
+    D3D12_COMPUTE_PIPELINE_STATE_DESC sobel_pso = {};
+    sobel_pso.pRootSignature = render_ctx->root_signature_postprocessing_sobel;
+    sobel_pso.CS.pShaderBytecode = compute_shader_code_sobel->GetBufferPointer();
+    sobel_pso.CS.BytecodeLength = compute_shader_code_sobel->GetBufferSize();
+    sobel_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+    render_ctx->device->CreateComputePipelineState(&sobel_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_SOBEL]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1550,6 +1688,15 @@ flush_command_queue (D3DRenderContext * render_ctx) {
         }
     }
 }
+static void
+draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist) {
+    // -- null out IA stage since we build the vertex off the SV_VertexID in the shader
+    cmdlist->IASetVertexBuffers(0, 1, nullptr);
+    cmdlist->IASetIndexBuffer(nullptr);
+    cmdlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    cmdlist->DrawInstanced(6, 1, 0, 0);
+}
 static HRESULT
 draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter, UINT blur_count) {
     HRESULT ret = E_FAIL;
@@ -1649,7 +1796,7 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         //
         BlurFilter_Execute(
             blur_filter, cmdlist,
-            render_ctx->root_signature_postprocessing,
+            render_ctx->root_signature_postprocessing_blur,
             render_ctx->psos[LAYER_HOR_BLUR],
             render_ctx->psos[LAYER_VER_BLUR],
             backbuffer,
@@ -1677,6 +1824,182 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         // -- indicate that the backbuffer will now be used to present
         resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     }
+
+    // -- finish populating command list
+    cmdlist->Close();
+
+    ID3D12CommandList * cmd_lists [] = {cmdlist};
+    render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
+
+    render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
+
+    return ret;
+}
+static HRESULT
+draw_stylized (
+    D3DRenderContext * render_ctx,
+    GpuWaves * waves,
+    OffscreenRenderTarget * ort,
+    BlurFilter * blur_filter, UINT blur_count,
+    SobelFilter * sobel_filter
+) {
+    HRESULT ret = E_FAIL;
+    UINT frame_index = render_ctx->frame_index;
+    UINT backbuffer_index = render_ctx->backbuffer_index;
+    ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
+    ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
+
+    // Populate command list
+
+    // -- reset cmd_allocator and cmd_list
+    render_ctx->frame_resources[frame_index].cmd_list_alloc->Reset();
+
+    // When ExecuteCommandList() is called on a particular command 
+    // list, that command list can then be reset at any time and must be before 
+    // re-recording.
+    ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
+
+    ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
+    cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
+
+    update_waves_gpu(waves, render_ctx, &global_timer);
+
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
+
+    // -- set viewport and scissor
+    cmdlist->RSSetViewports(1, &render_ctx->viewport);
+    cmdlist->RSSetScissorRects(1, &render_ctx->scissor_rect);
+
+    // -- change offscreen texture to be used as a render-target output
+    resource_usage_transition(
+        cmdlist,
+        ort->texture,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_RENDER_TARGET
+    );
+
+    // -- get CPU descriptor handle that represents the start of the rtv heap
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    //D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    //rtv_handle.ptr = SIZE_T(INT64(rtv_handle.ptr) + INT64(render_ctx->backbuffer_index) * INT64(render_ctx->rtv_descriptor_size));    // -- apply initial offset
+
+    cmdlist->ClearRenderTargetView(ort->hcpu_rtv, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
+    cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+    // -- specify the buffers we are going to render to
+    cmdlist->OMSetRenderTargets(1, &ort->hcpu_rtv, true, &dsv_handle);
+
+    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
+
+    // Bind per-pass constant buffer.  We only need to do this once per-pass.
+    ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
+    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
+    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_srv); // set displacement map
+
+    // 1. draw opaque objs first (opaque pso is currently used)
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->opaque_ritems, frame_index
+    );
+    // 2. draw alpha-tested box/crate
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->alphatested_ritems, frame_index
+    );
+    // 3. draw tree-sprites
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->alphatested_treesprites_ritems, frame_index
+    );
+    // 4. draw gpu waves
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
+    draw_render_items(
+        cmdlist,
+        render_ctx->frame_resources[frame_index].obj_cb,
+        render_ctx->frame_resources[frame_index].mat_cb,
+        render_ctx->cbv_srv_uav_descriptor_size,
+        render_ctx->srv_heap,
+        &render_ctx->gpu_waves_rtimes, frame_index
+    );
+
+#if 0
+    // Change offscreen texture to be used as an input.
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mOffscreenRT->Resource(),
+                                                                           D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ));
+
+    mSobelFilter->Execute(mCommandList.Get(), mPostProcessRootSignature.Get(),
+                          mPSOs["sobel"].Get(), mOffscreenRT->Srv());
+
+#endif // 0
+
+#if 0
+    if (blur_count > 0) {
+        //
+        // Blur compute work
+        //
+        BlurFilter_Execute(
+            blur_filter, cmdlist,
+            render_ctx->root_signature_postprocessing,
+            render_ctx->psos[LAYER_HOR_BLUR],
+            render_ctx->psos[LAYER_VER_BLUR],
+            ort->texture,
+            blur_count
+        );
+        // -- prepare to copy blurred output to the backbuffer
+        resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+
+        cmdlist->CopyResource(
+            ort->texture,
+            blur_filter->blur_map0
+        );
+
+        /*if (global_imgui_enabled) {
+            resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+            resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        } else {*/
+        resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+    //}
+    } else if (blur_count == 0) {
+    
+#endif // 0
+    if (global_imgui_enabled)
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+
+    // -- indicate that the backbuffer will now be used to present
+    resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    //}
+
+    //
+    // Switching back to backbuffer rendering
+    //
+    resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    rtv_handle.ptr = SIZE_T(INT64(rtv_handle.ptr) + INT64(render_ctx->backbuffer_index) * INT64(render_ctx->rtv_descriptor_size));    // -- apply offset
+    cmdlist->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
+
+    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature_postprocessing_sobel);
+    cmdlist->SetPipelineState(render_ctx->psos[LAYER_COMPISITE]);
+    cmdlist->SetGraphicsRootDescriptorTable(0, ort->hgpu_srv);
+    cmdlist->SetGraphicsRootDescriptorTable(1, sobel_filter->hgpu_srv);
+    draw_fullscreen_quad(cmdlist);
+
+    resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     // -- finish populating command list
     cmdlist->Close();
@@ -1758,7 +2081,7 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
 }
 static void
-d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
+d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobel, OffscreenRenderTarget * ort) {
     int w = global_scene_ctx.width;
     int h = global_scene_ctx.height;
 
@@ -1867,6 +2190,12 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur) {
         // blur filter resize
         if (blur)
             BlurFilter_Resize(blur, w, h);
+
+        if (sobel)
+            SobelFilter_Resize(sobel, w, h);
+
+        if (ort)
+            OffscreenRenderTarget_Resize(ort, w, h);
     }
 }
 static void
@@ -1933,13 +2262,13 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 global_paused = true;
             } else if (wParam == SIZE_MAXIMIZED) {
                 global_paused = false;
-                d3d_resize(_render_ctx, global_blur_filter);
+                d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
             } else if (wParam == SIZE_RESTORED) {
                 // TODO(omid): handle restore from minimize/maximize 
                 if (global_resizing) {
                     // don't do nothing until resizing finished
                 } else {
-                    d3d_resize(_render_ctx, global_blur_filter);
+                    d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
                 }
             }
         }
@@ -1956,7 +2285,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         global_paused = false;
         global_resizing  = false;
         Timer_Start(&global_timer);
-        d3d_resize(_render_ctx, global_blur_filter);
+        d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
     } break;
     case WM_DESTROY: {
         PostQuitMessage(0);
@@ -2197,7 +2526,21 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         DXGI_FORMAT_R8G8B8A8_UNORM
     );
 
-    create_descriptor_heaps(render_ctx, waves, global_blur_filter);
+    // Offscreen RenderTarget setup
+    OffscreenRenderTarget_Init(
+        &global_offscreen_rendertarget,
+        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
+        render_ctx->backbuffer_format
+    );
+
+    // Sobel initial setup
+    SobelFilter_Init(
+        &global_sobel_filter,
+        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
+        render_ctx->backbuffer_format
+    );
+
+    create_descriptor_heaps(render_ctx, waves, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2293,7 +2636,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
     create_root_signature_gpuwaves(render_ctx->device, &render_ctx->root_signature_waves);
-    create_root_signature_postprocessing(render_ctx->device, &render_ctx->root_signature_postprocessing);
+    create_root_signature_postprocessing_blur(render_ctx->device, &render_ctx->root_signature_postprocessing_blur);
+    create_root_signature_postprocessing_sobel(render_ctx->device, &render_ctx->root_signature_postprocessing_sobel);
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
@@ -2312,6 +2656,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     wchar_t const * tree_shader_path = L"./shaders/tree_sprite.hlsl";
     wchar_t const * wavesim_shader_path = L"./shaders/wave_sim.hlsl";
     wchar_t const * blur_shader_path = L"./shaders/blur.hlsl";
+    wchar_t const * sobel_shader_path = L"./shaders/sobel.hlsl";
+    wchar_t const * composite_shader_path = L"./shaders/composite.hlsl";
     uint32_t code_page = CP_UTF8;
     IDxcBlobEncoding * shader_blob = nullptr;
     IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need different blobs
@@ -2329,6 +2675,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     IDxcBlob * compute_shader_code_disturb_wave = nullptr;
     IDxcBlob * compute_shader_code_hor_blur = nullptr;
     IDxcBlob * compute_shader_code_ver_blur = nullptr;
+    IDxcBlob * vertex_shader_code_composite = nullptr;
+    IDxcBlob * pixel_shader_code_composite = nullptr;
+    IDxcBlob * compute_shader_code_sobel = nullptr;
     {   // standard shaders
         hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
         if (shader_blob) {
@@ -2485,6 +2834,62 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             }
         }
     }
+    {   // composite shaders (vertex shader and pixel shader)
+        hr = dxc_lib->CreateBlobFromFile(composite_shader_path, &code_page, &shader_blob);
+        if (shader_blob) {
+            IDxcIncludeHandler * include_handler = nullptr;
+            dxc_lib->CreateIncludeHandler(&include_handler);
+            hr = dxc_compiler->Compile(shader_blob, composite_shader_path, L"composite_vs", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&vertex_shader_code_composite);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+            hr = dxc_compiler->Compile(shader_blob, composite_shader_path, L"composite_ps", L"ps_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&pixel_shader_code_composite);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+        }
+    }
+    {   // sobel compute-shader
+        hr = dxc_lib->CreateBlobFromFile(sobel_shader_path, &code_page, &shader_blob);
+        if (shader_blob) {
+            IDxcIncludeHandler * include_handler = nullptr;
+            dxc_lib->CreateIncludeHandler(&include_handler);
+            hr = dxc_compiler->Compile(shader_blob, sobel_shader_path, L"sobel_cs", L"cs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            dxc_res->GetStatus(&hr);
+            dxc_res->GetResult(&compute_shader_code_sobel);
+            if (FAILED(hr)) {
+                if (dxc_res) {
+                    IDxcBlobEncoding * errorsBlob = nullptr;
+                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
+                    if (SUCCEEDED(hr) && errorsBlob) {
+                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+                        return(0);
+                    }
+                }
+                // Handle compilation error...
+            }
+        }
+    }
     _ASSERT_EXPR(vertex_shader_code, "invalid shader");
     _ASSERT_EXPR(vertex_shader_code_wave, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
@@ -2496,6 +2901,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     _ASSERT_EXPR(compute_shader_code_disturb_wave, "invalid shader");
     _ASSERT_EXPR(compute_shader_code_hor_blur, "invalid shader");
     _ASSERT_EXPR(compute_shader_code_ver_blur, "invalid shader");
+    _ASSERT_EXPR(vertex_shader_code_composite, "invalid shader");
+    _ASSERT_EXPR(pixel_shader_code_composite, "invalid shader");
+    _ASSERT_EXPR(compute_shader_code_sobel, "invalid shader");
 
 #pragma endregion
 
@@ -2512,7 +2920,10 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         compute_shader_code_update_wave,
         compute_shader_code_disturb_wave,
         compute_shader_code_hor_blur,
-        compute_shader_code_ver_blur
+        compute_shader_code_ver_blur,
+        vertex_shader_code_composite,
+        pixel_shader_code_composite,
+        compute_shader_code_sobel
     );
 #pragma endregion PSO_Creation
 
@@ -2671,7 +3082,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
             Timer_Tick(&global_timer);
 
-            if (/*!global_paused*/true) {
+            if (!global_paused) {
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
                 update_camera(&global_scene_ctx);
 
@@ -2680,7 +3091,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
+                //CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
+                CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);
@@ -2733,10 +3145,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     pixel_shader_code_opaque->Release();
     vertex_shader_code->Release();
 
-    render_ctx->root_signature_postprocessing->Release();
+    render_ctx->root_signature_postprocessing_sobel->Release();
+    render_ctx->root_signature_postprocessing_blur->Release();
     render_ctx->root_signature_waves->Release();
     render_ctx->root_signature->Release();
 
+    SobelFilter_Deinit(&global_sobel_filter);
+    OffscreenRenderTarget_Deinit(&global_offscreen_rendertarget);
     BlurFilter_Deinit(global_blur_filter);
     ::free(blur_memory);
     GpuWaves_Deinit(waves);

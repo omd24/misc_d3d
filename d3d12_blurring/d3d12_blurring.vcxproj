@@ -158,8 +158,10 @@
     <ClCompile Include="..\externals\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\externals\imgui\imgui_widgets.cpp" />
     <ClCompile Include="blur_filter.cpp" />
-    <ClCompile Include="d3d_blurring.cpp" />
+    <ClCompile Include="sobel_filter.cpp" />
+    <ClCompile Include="_d3d_blurring.cpp" />
     <ClCompile Include="gpu_waves.cpp" />
+    <ClCompile Include="offscreen_render_target.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="blur_filter.h" />
@@ -169,9 +171,15 @@
     <ClInclude Include="headers\mesh_geometry.h" />
     <ClInclude Include="headers\utils.h" />
     <ClInclude Include="gpu_waves.h" />
+    <ClInclude Include="offscreen_render_target.h" />
+    <ClInclude Include="sobel_filter.h" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\blur.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="shaders\composite.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </FxCompile>
@@ -180,6 +188,10 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </FxCompile>
     <FxCompile Include="shaders\light_utils.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="shaders\sobel.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </FxCompile>

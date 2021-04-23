@@ -18,7 +18,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="d3d_blurring.cpp">
+    <ClCompile Include="_d3d_blurring.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="gpu_waves.cpp">
@@ -45,6 +45,12 @@
     <ClCompile Include="blur_filter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="offscreen_render_target.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sobel_filter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="headers\common.h">
@@ -68,6 +74,12 @@
     <ClInclude Include="blur_filter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="offscreen_render_target.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sobel_filter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\default.hlsl">
@@ -83,6 +95,12 @@
       <Filter>Resource Files</Filter>
     </FxCompile>
     <FxCompile Include="shaders\blur.hlsl">
+      <Filter>Resource Files</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\composite.hlsl">
+      <Filter>Resource Files</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\sobel.hlsl">
       <Filter>Resource Files</Filter>
     </FxCompile>
   </ItemGroup>
