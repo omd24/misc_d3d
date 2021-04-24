@@ -10,6 +10,7 @@ create_descriptors_internal (OffscreenRenderTarget * ort) {
     srv_desc.Texture2D.MipLevels = 1;
 
     ort->device->CreateShaderResourceView(ort->texture, &srv_desc, ort->hcpu_srv);
+
     ort->device->CreateRenderTargetView(ort->texture, nullptr, ort->hcpu_rtv);
 }
 static void
@@ -34,7 +35,7 @@ create_resources_internal (OffscreenRenderTarget * ort) {
     heap_def.CreationNodeMask = 1;
     heap_def.VisibleNodeMask = 1;
 
-    ort->device->CreateCommittedResource(&heap_def, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_GENERIC_READ, NULL, IID_PPV_ARGS(&ort->texture));
+    ort->device->CreateCommittedResource(&heap_def, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ort->texture));
 }
 void
 OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format) {
@@ -43,7 +44,6 @@ OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev,
     out_ort->width = w;
     out_ort->height = h;
     out_ort->format = format;
-
     out_ort->initialized = true;
     create_resources_internal(out_ort);
 }
@@ -67,13 +67,16 @@ OffscreenRenderTarget_CreateDescriptors (
     }
 }
 void
-OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h) {
+OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h, D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv) {
     if (ort->initialized) {
         if ((ort->width != w) || (ort->height != h)) {
             ort->width = w;
             ort->height = h;
 
+            ort->texture->Release();
             create_resources_internal(ort);
+
+            ort->hcpu_rtv = hcpu_rtv;
             create_descriptors_internal(ort);
         }
     }

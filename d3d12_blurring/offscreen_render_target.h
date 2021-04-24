@@ -33,6 +33,6 @@ OffscreenRenderTarget_CreateDescriptors (
 );
 
 void
-OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h);
+OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h, D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv);
 
 

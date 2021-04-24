@@ -2201,12 +2201,20 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
         // blur filter resize
         if (blur)
             BlurFilter_Resize(blur, w, h);
+
         // sobel filter resize
         if (sobel)
             SobelFilter_Resize(sobel, w, h);
+
         // ort filter resize
-        //if (ort)
-        //    OffscreenRenderTarget_Resize(ort, w, h);
+        if (ort) {
+            // NOTE(omid): Apparantly, recreating the swapchain render-targets (backbuffers), upon resizing, changes RTV heap handle in some way
+            // therefore, the rtv cpu handle for offscreen render-target needs to get updated accordingly
+            D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            hcpu_rtv.ptr +=
+                (NUM_BACKBUFFERS) * render_ctx->rtv_descriptor_size;
+            OffscreenRenderTarget_Resize(ort, w, h, hcpu_rtv);
+        }
     }
 }
 static void
