@@ -33,7 +33,7 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-//#define ENABLE_DEARIMGUI
+#define ENABLE_DEARIMGUI
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
 #pragma warning (disable: 6011)     // dereferencing a potentially null pointer
@@ -1858,9 +1858,6 @@ draw_stylized (
     // -- reset cmd_allocator and cmd_list
     render_ctx->frame_resources[frame_index].cmd_list_alloc->Reset();
 
-    // When ExecuteCommandList() is called on a particular command 
-    // list, that command list can then be reset at any time and must be before 
-    // re-recording.
     ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
 
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
@@ -1884,8 +1881,6 @@ draw_stylized (
 
     // -- get CPU descriptor handle that represents the start of the rtv heap
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-    //D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
-    //rtv_handle.ptr = SIZE_T(INT64(rtv_handle.ptr) + INT64(render_ctx->backbuffer_index) * INT64(render_ctx->rtv_descriptor_size));    // -- apply initial offset
 
     cmdlist->ClearRenderTargetView(ort->hcpu_rtv, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
     cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
@@ -1940,50 +1935,6 @@ draw_stylized (
         &render_ctx->gpu_waves_rtimes, frame_index
     );
 
-#if 0
-    // Change offscreen texture to be used as an input.
-    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mOffscreenRT->Resource(),
-                                                                           D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ));
-
-    mSobelFilter->Execute(mCommandList.Get(), mPostProcessRootSignature.Get(),
-                          mPSOs["sobel"].Get(), mOffscreenRT->Srv());
-
-#endif // 0
-
-#if 0
-    if (blur_count > 0) {
-        //
-        // Blur compute work
-        //
-        BlurFilter_Execute(
-            blur_filter, cmdlist,
-            render_ctx->root_signature_postprocessing,
-            render_ctx->psos[LAYER_HOR_BLUR],
-            render_ctx->psos[LAYER_VER_BLUR],
-            ort->texture,
-            blur_count
-        );
-        // -- prepare to copy blurred output to the backbuffer
-        resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-
-        cmdlist->CopyResource(
-            ort->texture,
-            blur_filter->blur_map0
-        );
-
-        /*if (global_imgui_enabled) {
-            resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-            resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        } else {*/
-        resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-    //}
-} else if (blur_count == 0) {
-
-#endif // 0
-    if (global_imgui_enabled)
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-
     //
     // Sobel compute work
     //
@@ -2008,7 +1959,40 @@ draw_stylized (
     cmdlist->SetGraphicsRootDescriptorTable(1, sobel_filter->hgpu_srv);
     draw_fullscreen_quad(cmdlist, &render_ctx->opaque_ritems.ritems[0]);
 
-    resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    if (blur_count > 0) {
+        //
+        // Blur compute work
+        //
+        BlurFilter_Execute(
+            blur_filter, cmdlist,
+            render_ctx->root_signature_postprocessing_blur,
+            render_ctx->psos[LAYER_HOR_BLUR],
+            render_ctx->psos[LAYER_VER_BLUR],
+            backbuffer,
+            blur_count
+        );
+        // -- prepare to copy blurred output to the backbuffer
+        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+
+        cmdlist->CopyResource(
+            backbuffer,
+            blur_filter->blur_map0
+        );
+
+        if (global_imgui_enabled) {
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        } else {
+            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+        }
+    } else if (blur_count == 0) {
+        if (global_imgui_enabled)
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
+
+        // -- indicate that the backbuffer will now be used to present
+        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    }
 
     // -- finish populating command list
     cmdlist->Close();
@@ -2997,6 +2981,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Imgui Setup
+    bool stylized_sobel = false;
     bool * ptr_open = nullptr;
     ImGuiWindowFlags window_flags = 0;
     bool beginwnd, sliderf, coloredit, sliderint;
@@ -3011,12 +2996,24 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
         // calculate imgui cpu & gpu handles on location on srv_heap
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
+        imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+            _COUNT_TEX +
+            6 +     /* GpuWaves descriptors */
+            4 +     /* Blur descriptors     */
+            2 +     /* Sobel descriptors    */
+            1       /* Offscreen RenderTarget descriptor */
+            ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* blur descriptors */));
+        imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
+            _COUNT_TEX +
+            6 +     /* GpuWaves descriptors */
+            4 +     /* Blur descriptors     */
+            2 +     /* Sobel descriptors    */
+            1       /* Offscreen RenderTarget descriptor */
+            ));
 
-        // Setup Platform/Renderer backends
+            // Setup Platform/Renderer backends
         ImGui_ImplWin32_Init(hwnd);
         ImGui_ImplDX12_Init(
             render_ctx->device, NUM_QUEUING_FRAMES,
@@ -3073,12 +3070,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::Combo("Box Material", &i_box_mat, "   Wood\0   Wire-fenced\0\0");
 
                 ImGui::SliderInt(
-                    "Blur Count",
+                    "Blur Filters",
                     &blur_count,
                     0,
                     10
                 );
                 sliderint = ImGui::IsItemActive();
+
+                ImGui::Checkbox("Draw Stylized (Sobel Filter)", &stylized_sobel);
 
                 ImGui::Text("\n\n");
                 ImGui::Separator();
@@ -3107,8 +3106,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                //CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
+                if (!stylized_sobel) {
+                    CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
+                } else {
+                    CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
+                }
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);
