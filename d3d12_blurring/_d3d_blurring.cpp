@@ -2208,12 +2208,7 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
 
         // ort filter resize
         if (ort) {
-            // NOTE(omid): Apparantly, recreating the swapchain render-targets (backbuffers), upon resizing, changes RTV heap handle in some way
-            // therefore, the rtv cpu handle for offscreen render-target needs to get updated accordingly
-            D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
-            hcpu_rtv.ptr +=
-                (NUM_BACKBUFFERS) * render_ctx->rtv_descriptor_size;
-            OffscreenRenderTarget_Resize(ort, w, h, hcpu_rtv);
+            OffscreenRenderTarget_Resize(ort, w, h);
         }
     }
 }
@@ -2403,8 +2398,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             adapters[i]->Release();
         }
     }
-    // store CBV_SRV_UAV descriptor increment size for later
+    // store CBV_SRV_UAV descriptor increment size
     render_ctx->cbv_srv_uav_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // store RTV descriptor increment size
+    render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // Check 4X MSAA quality support for our back buffer format.
     D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS quality_levels;
@@ -2617,7 +2615,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 #pragma region Create RTV
     // -- create frame resources: rtv for each frame
-    render_ctx->rtv_descriptor_size = render_ctx->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle_start = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < NUM_BACKBUFFERS; ++i) {
         render_ctx->swapchain->GetBuffer(i, IID_PPV_ARGS(&render_ctx->render_targets[i]));

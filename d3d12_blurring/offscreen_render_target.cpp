@@ -67,7 +67,7 @@ OffscreenRenderTarget_CreateDescriptors (
     }
 }
 void
-OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h, D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv) {
+OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h) {
     if (ort->initialized) {
         if ((ort->width != w) || (ort->height != h)) {
             ort->width = w;
@@ -76,7 +76,6 @@ OffscreenRenderTarget_Resize (OffscreenRenderTarget * ort, UINT w, UINT h, D3D12
             ort->texture->Release();
             create_resources_internal(ort);
 
-            ort->hcpu_rtv = hcpu_rtv;
             create_descriptors_internal(ort);
         }
     }
