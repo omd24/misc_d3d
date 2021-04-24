@@ -16,6 +16,7 @@ struct SobelFilter {
     D3D12_GPU_DESCRIPTOR_HANDLE hgpu_uav;
 
     ID3D12Resource * output;
+    bool new_resource_flag;
 };
 
 void

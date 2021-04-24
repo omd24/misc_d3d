@@ -35,15 +35,21 @@ create_resources_internal (OffscreenRenderTarget * ort) {
     heap_def.CreationNodeMask = 1;
     heap_def.VisibleNodeMask = 1;
 
-    ort->device->CreateCommittedResource(&heap_def, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&ort->texture));
+    // -- specify clear color to suppress warning EXECUTION WARNING #820
+    // nagging about ID3D12CommandList::ClearRenderTargetView: The application did not pass any clear value to resource creation.
+    D3D12_CLEAR_VALUE clear_color = {};
+    memcpy(clear_color.Color, ort->initial_clear_color, sizeof(ort->initial_clear_color));
+    clear_color.Format = ort->format;
+    ort->device->CreateCommittedResource(&heap_def, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_GENERIC_READ, &clear_color, IID_PPV_ARGS(&ort->texture));
 }
 void
-OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format) {
+OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format, float clear_color []) {
     _ASSERT_EXPR(out_ort, _T("Invalid Render target ptr"));
     out_ort->device = dev;
     out_ort->width = w;
     out_ort->height = h;
     out_ort->format = format;
+    memcpy(out_ort->initial_clear_color, clear_color, sizeof(out_ort->initial_clear_color));
     out_ort->initialized = true;
     create_resources_internal(out_ort);
 }

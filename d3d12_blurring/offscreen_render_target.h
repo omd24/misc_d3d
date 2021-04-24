@@ -15,11 +15,13 @@ struct OffscreenRenderTarget {
 
     ID3D12Resource * texture;
 
+    FLOAT initial_clear_color [4];
+
     bool initialized;
 };
 
 void
-OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format);
+OffscreenRenderTarget_Init (OffscreenRenderTarget * out_ort, ID3D12Device * dev, UINT w, UINT h, DXGI_FORMAT format, float clear_color []);
 
 void
 OffscreenRenderTarget_Deinit (OffscreenRenderTarget * ort);

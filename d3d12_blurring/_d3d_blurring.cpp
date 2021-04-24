@@ -848,7 +848,7 @@ create_descriptor_heaps (
         (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
     D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
     hcpu_rtv.ptr +=
-        (NUM_BACKBUFFERS) * render_ctx->rtv_descriptor_size;
+        (NUM_BACKBUFFERS)*render_ctx->rtv_descriptor_size;
     OffscreenRenderTarget_CreateDescriptors(ort, hcpu_offscreen_rt, hgpu_offscreen_rt, hcpu_rtv);
 
     // Create Depth Stencil View Descriptor Heap
@@ -1690,9 +1690,12 @@ flush_command_queue (D3DRenderContext * render_ctx) {
     }
 }
 static void
-draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist) {
+draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist, RenderItem * dummy_ritem) {
+    // using dummy buffer to suppress EXECUTION WARNING #202: COMMAND_LIST_DRAW_VERTEX_BUFFER_NOT_SET
+    D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(dummy_ritem->geometry);
+
     // -- null out IA stage since we build the vertex off the SV_VertexID in the shader
-    cmdlist->IASetVertexBuffers(0, 1, nullptr);
+    cmdlist->IASetVertexBuffers(0, 1, &vbv);
     cmdlist->IASetIndexBuffer(nullptr);
     cmdlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
@@ -1836,8 +1839,6 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     return ret;
 }
-#if 0
-
 static HRESULT
 draw_stylized (
     D3DRenderContext * render_ctx,
@@ -1977,8 +1978,8 @@ draw_stylized (
         } else {*/
         resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     //}
-    } else if (blur_count == 0) {
-    
+} else if (blur_count == 0) {
+
 #endif // 0
     if (global_imgui_enabled)
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
@@ -2005,7 +2006,7 @@ draw_stylized (
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_COMPISITE]);
     cmdlist->SetGraphicsRootDescriptorTable(0, ort->hgpu_srv);
     cmdlist->SetGraphicsRootDescriptorTable(1, sobel_filter->hgpu_srv);
-    draw_fullscreen_quad(cmdlist);
+    draw_fullscreen_quad(cmdlist, &render_ctx->opaque_ritems.ritems[0]);
 
     resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
@@ -2019,8 +2020,6 @@ draw_stylized (
 
     return ret;
 }
-
-#endif // 0
 
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
@@ -2547,7 +2546,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     OffscreenRenderTarget_Init(
         &global_offscreen_rendertarget,
         render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
-        render_ctx->backbuffer_format
+        render_ctx->backbuffer_format,
+        (float *)&render_ctx->main_pass_constants.fog_color
     );
 
     // Sobel initial setup
@@ -3107,8 +3107,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                //CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
+                //CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
+                CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);

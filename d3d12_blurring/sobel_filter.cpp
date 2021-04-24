@@ -45,6 +45,7 @@ create_resources_internal (SobelFilter * filter) {
         &heap_def, D3D12_HEAP_FLAG_NONE, &tex_desc,
         D3D12_RESOURCE_STATE_COMMON, NULL, IID_PPV_ARGS(&filter->output)
     );
+    filter->new_resource_flag = true;
 }
 
 void
@@ -54,6 +55,7 @@ SobelFilter_Init (SobelFilter * filter, ID3D12Device * dev, UINT w, UINT h, DXGI
     filter->width = w;
     filter->height = h;
     filter->format = format;
+    filter->new_resource_flag = false;
 
     create_resources_internal(filter);
 }
@@ -103,7 +105,10 @@ SobelFilter_Execute (
     cmdlist->SetComputeRootDescriptorTable(0, input);
     cmdlist->SetComputeRootDescriptorTable(2, filter->hgpu_uav);
 
-    resource_usage_transition(cmdlist, filter->output, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (filter->new_resource_flag)
+        resource_usage_transition(cmdlist, filter->output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    else
+        resource_usage_transition(cmdlist, filter->output, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // how many groups do we need to dispatch to cover image where each group covers 16x16 pixels
     UINT num_groups_x = (UINT)ceilf(filter->width / 16.0f);
@@ -111,4 +116,6 @@ SobelFilter_Execute (
     cmdlist->Dispatch(num_groups_x, num_groups_y, 1);
 
     resource_usage_transition(cmdlist, filter->output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_GENERIC_READ);
+
+    filter->new_resource_flag = false;
 }
