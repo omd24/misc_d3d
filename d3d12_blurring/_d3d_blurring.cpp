@@ -131,6 +131,7 @@ bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
 BlurFilter * global_blur_filter;
+
 SobelFilter global_sobel_filter = {};
 OffscreenRenderTarget global_offscreen_rendertarget = {};
 
@@ -831,7 +832,7 @@ create_descriptor_heaps (
 
     // Create Render Target View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {};
-    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS;
+    rtv_heap_desc.NumDescriptors = NUM_BACKBUFFERS + 1 /* offscreen render-target */;
     rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
@@ -1835,6 +1836,8 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     return ret;
 }
+#if 0
+
 static HRESULT
 draw_stylized (
     D3DRenderContext * render_ctx,
@@ -1980,9 +1983,14 @@ draw_stylized (
     if (global_imgui_enabled)
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
-    // -- indicate that the backbuffer will now be used to present
-    resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    //}
+    //
+    // Sobel compute work
+    //
+
+    // -- change the offscreen rendertarget to be used as input
+    resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
+
+    SobelFilter_Execute(sobel_filter, cmdlist, render_ctx->root_signature_postprocessing_sobel, render_ctx->psos[LAYER_SOBEL], ort->hgpu_srv);
 
     //
     // Switching back to backbuffer rendering
@@ -2011,6 +2019,9 @@ draw_stylized (
 
     return ret;
 }
+
+#endif // 0
+
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
     _ASSERT_EXPR(scene_ctx, "scene_ctx not valid");
@@ -2190,12 +2201,12 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
         // blur filter resize
         if (blur)
             BlurFilter_Resize(blur, w, h);
-
+        // sobel filter resize
         if (sobel)
             SobelFilter_Resize(sobel, w, h);
-
-        if (ort)
-            OffscreenRenderTarget_Resize(ort, w, h);
+        // ort filter resize
+        //if (ort)
+        //    OffscreenRenderTarget_Resize(ort, w, h);
     }
 }
 static void
@@ -3091,8 +3102,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                //CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
+                CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
+                //CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);
@@ -3144,6 +3155,16 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     pixel_shader_code_alphatest->Release();
     pixel_shader_code_opaque->Release();
     vertex_shader_code->Release();
+    vertex_shader_code_wave->Release();
+    compute_shader_code_update_wave->Release();
+    compute_shader_code_disturb_wave->Release();
+    compute_shader_code_hor_blur->Release();
+    compute_shader_code_ver_blur->Release();
+    vertex_shader_code_composite->Release();
+    pixel_shader_code_composite->Release();
+    compute_shader_code_sobel->Release();
+
+    shader_blob->Release();
 
     render_ctx->root_signature_postprocessing_sobel->Release();
     render_ctx->root_signature_postprocessing_blur->Release();
