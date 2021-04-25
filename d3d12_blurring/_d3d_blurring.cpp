@@ -78,7 +78,7 @@ enum SHADERS_CODE {
     SHADER_HOR_BLUR_CS = 9,
     SHADER_VER_BLUR_CS = 10,
     SHADER_COMPOSITE_VS = 11,
-    SHADER_COMPISITE_PS = 12,
+    SHADER_COMPOSITE_PS = 12,
     SHADER_SOBEL_CS = 13,
 
     _COUNT_SHADERS
@@ -1260,28 +1260,17 @@ compile_shader(wchar_t * path, wchar_t const * entry_point, wchar_t const * shad
             }
             // Handle compilation error...
         }
+        include_handler->Release();
     }
+    shader_blob_encoding->Release();
+    dxc_compiler->Release();
+    dxc_lib->Release();
+
     _ASSERT_EXPR(*out_shader_ptr, _T("Shader Compilation Failed"));
     return ret;
 }
 static void
-create_pso (
-    D3DRenderContext * render_ctx,
-    IDxcBlob * vertex_shader_code_std,
-    IDxcBlob * vertex_shader_code_wave,
-    IDxcBlob * pixel_shader_code_opaque,
-    IDxcBlob * pixel_shader_code_alphatested,
-    IDxcBlob * vertex_shader_code_tree,
-    IDxcBlob * geo_shader_code_tree,
-    IDxcBlob * pixel_shader_code_tree,
-    IDxcBlob * compute_shader_code_update_wave,
-    IDxcBlob * compute_shader_code_disturb_wave,
-    IDxcBlob * compute_shader_code_hor_blur,
-    IDxcBlob * compute_shader_code_ver_blur,
-    IDxcBlob * vertex_shader_code_composite,
-    IDxcBlob * pixel_shader_code_composite,
-    IDxcBlob * compute_shader_code_sobel
-) {
+create_pso (D3DRenderContext * render_ctx) {
     // -- Create vertex-input-layout Elements
 
     D3D12_INPUT_ELEMENT_DESC std_input_desc[3];
@@ -1368,10 +1357,10 @@ create_pso (
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
     opaque_pso_desc.pRootSignature = render_ctx->root_signature;
-    opaque_pso_desc.VS.pShaderBytecode = vertex_shader_code_std->GetBufferPointer();
-    opaque_pso_desc.VS.BytecodeLength = vertex_shader_code_std->GetBufferSize();
-    opaque_pso_desc.PS.pShaderBytecode = pixel_shader_code_opaque->GetBufferPointer();
-    opaque_pso_desc.PS.BytecodeLength = pixel_shader_code_opaque->GetBufferSize();
+    opaque_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferPointer();
+    opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferSize();
+    opaque_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
+    opaque_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
     opaque_pso_desc.BlendState = def_blend_desc;
     opaque_pso_desc.SampleMask = UINT_MAX;
     opaque_pso_desc.RasterizerState = def_rasterizer_desc;
@@ -1409,8 +1398,8 @@ create_pso (
     // -- Create PSO for AlphaTested objs
     //
     D3D12_GRAPHICS_PIPELINE_STATE_DESC alpha_pso_desc = opaque_pso_desc;
-    alpha_pso_desc.PS.pShaderBytecode = pixel_shader_code_alphatested->GetBufferPointer();
-    alpha_pso_desc.PS.BytecodeLength = pixel_shader_code_alphatested->GetBufferSize();
+    alpha_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferPointer();
+    alpha_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferSize();
     alpha_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED]));
 
@@ -1418,12 +1407,12 @@ create_pso (
     // -- Create PSO for Tree sprites
     //
     D3D12_GRAPHICS_PIPELINE_STATE_DESC tree_pso_desc = opaque_pso_desc;
-    tree_pso_desc.VS.pShaderBytecode = vertex_shader_code_tree->GetBufferPointer();
-    tree_pso_desc.VS.BytecodeLength = vertex_shader_code_tree->GetBufferSize();
-    tree_pso_desc.GS.pShaderBytecode = geo_shader_code_tree->GetBufferPointer();
-    tree_pso_desc.GS.BytecodeLength = geo_shader_code_tree->GetBufferSize();
-    tree_pso_desc.PS.pShaderBytecode = pixel_shader_code_tree->GetBufferPointer();
-    tree_pso_desc.PS.BytecodeLength = pixel_shader_code_tree->GetBufferSize();
+    tree_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_VS]->GetBufferPointer();
+    tree_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_TREE_VS]->GetBufferSize();
+    tree_pso_desc.GS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_GS]->GetBufferPointer();
+    tree_pso_desc.GS.BytecodeLength = render_ctx->shaders[SHADER_TREE_GS]->GetBufferSize();
+    tree_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_PS]->GetBufferPointer();
+    tree_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_TREE_PS]->GetBufferSize();
     tree_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     tree_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
     tree_pso_desc.InputLayout.pInputElementDescs = treesprite_input_desc;
@@ -1434,16 +1423,16 @@ create_pso (
     // -- Create PSO for drawing waves
     //
     D3D12_GRAPHICS_PIPELINE_STATE_DESC waves_render_pso = transparent_pso_desc;
-    waves_render_pso.VS.pShaderBytecode = vertex_shader_code_wave->GetBufferPointer();
-    waves_render_pso.VS.BytecodeLength = vertex_shader_code_wave->GetBufferSize();
+    waves_render_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_WAVE_VS]->GetBufferPointer();
+    waves_render_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_WAVE_VS]->GetBufferSize();
     render_ctx->device->CreateGraphicsPipelineState(&waves_render_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_RENDER]));
     //
     // -- Create PSO for disturbing waves
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC waves_disturb_pso = {};
     waves_disturb_pso.pRootSignature = render_ctx->root_signature_waves;
-    waves_disturb_pso.CS.pShaderBytecode = compute_shader_code_disturb_wave->GetBufferPointer();
-    waves_disturb_pso.CS.BytecodeLength = compute_shader_code_disturb_wave->GetBufferSize();
+    waves_disturb_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_DISTURB_WAVE_CS]->GetBufferPointer();
+    waves_disturb_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_DISTURB_WAVE_CS]->GetBufferSize();
     waves_disturb_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&waves_disturb_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_DISTURB]));
     //
@@ -1451,8 +1440,8 @@ create_pso (
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC waves_update_pso = {};
     waves_update_pso.pRootSignature = render_ctx->root_signature_waves;
-    waves_update_pso.CS.pShaderBytecode = compute_shader_code_update_wave->GetBufferPointer();
-    waves_update_pso.CS.BytecodeLength = compute_shader_code_update_wave->GetBufferSize();
+    waves_update_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_UPDATE_WAVE_CS]->GetBufferPointer();
+    waves_update_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_UPDATE_WAVE_CS]->GetBufferSize();
     waves_update_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&waves_update_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_UPDATE]));
     //
@@ -1460,8 +1449,8 @@ create_pso (
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC hor_blur_pso = {};
     hor_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
-    hor_blur_pso.CS.pShaderBytecode = compute_shader_code_hor_blur->GetBufferPointer();
-    hor_blur_pso.CS.BytecodeLength = compute_shader_code_hor_blur->GetBufferSize();
+    hor_blur_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_HOR_BLUR_CS]->GetBufferPointer();
+    hor_blur_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_HOR_BLUR_CS]->GetBufferSize();
     hor_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&hor_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_HOR_BLUR]));
     //
@@ -1469,8 +1458,8 @@ create_pso (
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC ver_blur_pso = {};
     ver_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
-    ver_blur_pso.CS.pShaderBytecode = compute_shader_code_ver_blur->GetBufferPointer();
-    ver_blur_pso.CS.BytecodeLength = compute_shader_code_ver_blur->GetBufferSize();
+    ver_blur_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_VER_BLUR_CS]->GetBufferPointer();
+    ver_blur_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_VER_BLUR_CS]->GetBufferSize();
     ver_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&ver_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_VER_BLUR]));
 
@@ -1485,11 +1474,11 @@ create_pso (
     composite_pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     composite_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
 
-    composite_pso.VS.pShaderBytecode = vertex_shader_code_composite->GetBufferPointer();
-    composite_pso.VS.BytecodeLength = vertex_shader_code_composite->GetBufferSize();
+    composite_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_COMPOSITE_VS]->GetBufferPointer();
+    composite_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_COMPOSITE_VS]->GetBufferSize();
 
-    composite_pso.PS.pShaderBytecode = pixel_shader_code_composite->GetBufferPointer();
-    composite_pso.PS.BytecodeLength = pixel_shader_code_composite->GetBufferSize();
+    composite_pso.PS.pShaderBytecode = render_ctx->shaders[SHADER_COMPOSITE_PS]->GetBufferPointer();
+    composite_pso.PS.BytecodeLength = render_ctx->shaders[SHADER_COMPOSITE_PS]->GetBufferSize();
 
     render_ctx->device->CreateGraphicsPipelineState(&composite_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_COMPISITE]));
 
@@ -1498,8 +1487,8 @@ create_pso (
     //
     D3D12_COMPUTE_PIPELINE_STATE_DESC sobel_pso = {};
     sobel_pso.pRootSignature = render_ctx->root_signature_postprocessing_sobel;
-    sobel_pso.CS.pShaderBytecode = compute_shader_code_sobel->GetBufferPointer();
-    sobel_pso.CS.BytecodeLength = compute_shader_code_sobel->GetBufferSize();
+    sobel_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_SOBEL_CS]->GetBufferPointer();
+    sobel_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_SOBEL_CS]->GetBufferSize();
     sobel_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
     render_ctx->device->CreateComputePipelineState(&sobel_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_SOBEL]));
 }
@@ -2699,311 +2688,62 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // Load and compile shaders
 
 #pragma region Compile Shaders
-// -- using DXC shader compiler [from https://asawicki.info/news_1719_two_shader_compilers_of_direct3d_12]
-
-    IDxcLibrary * dxc_lib = nullptr;
-    HRESULT hr = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&dxc_lib));
-    // if (FAILED(hr)) Handle error
-    IDxcCompiler * dxc_compiler = nullptr;
-    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
-    // if (FAILED(hr)) Handle error
-
-    wchar_t shaders_path [] = L"./shaders/default.hlsl";
-    wchar_t tree_shader_path []= L"./shaders/tree_sprite.hlsl";
-    wchar_t wavesim_shader_path []= L"./shaders/wave_sim.hlsl";
-    wchar_t blur_shader_path [] = L"./shaders/blur.hlsl";
-    wchar_t sobel_shader_path []= L"./shaders/sobel.hlsl";
-    wchar_t composite_shader_path [] = L"./shaders/composite.hlsl";
-    uint32_t code_page = CP_UTF8;
-    IDxcBlobEncoding * shader_blob = nullptr;
-    IDxcOperationResult * dxc_res = nullptr;
-    IDxcBlob * vertex_shader_code = nullptr;
-    IDxcBlob * vertex_shader_code_wave = nullptr;
-    IDxcBlob * pixel_shader_code_opaque = nullptr;
-    IDxcBlob * pixel_shader_code_alphatest = nullptr;
-    IDxcBlob * vertex_shader_code_tree = nullptr;
-    IDxcBlob * geo_shader_code_tree = nullptr;
-    IDxcBlob * pixel_shader_code_tree = nullptr;
-    IDxcBlob * compute_shader_code_update_wave = nullptr;
-    IDxcBlob * compute_shader_code_disturb_wave = nullptr;
-    IDxcBlob * compute_shader_code_hor_blur = nullptr;
-    IDxcBlob * compute_shader_code_ver_blur = nullptr;
-    IDxcBlob * vertex_shader_code_composite = nullptr;
-    IDxcBlob * pixel_shader_code_composite = nullptr;
-    IDxcBlob * compute_shader_code_sobel = nullptr;
-
-
+    TCHAR shaders_path [] = _T("./shaders/default.hlsl");
+    TCHAR tree_shader_path []= _T("./shaders/tree_sprite.hlsl");
+    TCHAR wavesim_shader_path []= _T("./shaders/wave_sim.hlsl");
+    TCHAR blur_shader_path [] = _T("./shaders/blur.hlsl");
+    TCHAR sobel_shader_path []= _T("./shaders/sobel.hlsl");
+    TCHAR composite_shader_path [] = _T("./shaders/composite.hlsl");
+    
     {   // standard shaders
-
-        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &vertex_shader_code);
+        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
 
         int const n_define_wave = 1;
         DxcDefine defines_wave[n_define_wave] = {};
         defines_wave[0] = {.Name = _T("DISPLACEMENT_MAP"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), defines_wave, n_define_wave, &vertex_shader_code_wave);
+        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), defines_wave, n_define_wave, &render_ctx->shaders[SHADER_WAVE_VS]);
 
         int const n_define_fog = 1;
         DxcDefine defines_fog[n_define_fog] = {};
         defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &pixel_shader_code_opaque);
+        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
 
         int const n_define_alphatest = 2;
         DxcDefine defines_alphatest[n_define_alphatest] = {};
         defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
         defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &pixel_shader_code_alphatest);
-
+        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_ALPHATEST_PS]);
     }
-
-    //{   // standard shaders
-    //    hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
-    //    if (shader_blob) {
-    //        IDxcIncludeHandler * include_handler = nullptr;
-    //        int const n_define_fog = 1;
-    //        DxcDefine defines_fog[n_define_fog] = {};
-    //        defines_fog[0].Name = L"FOG";
-    //        defines_fog[0].Value = L"1";
-    //        int const n_define_alphatest = 2;
-    //        DxcDefine defines_alphatest[n_define_alphatest] = {};
-    //        defines_alphatest[0].Name = L"FOG";
-    //        defines_alphatest[0].Value = L"1";
-    //        defines_alphatest[1].Name = L"ALPHA_TEST";
-    //        defines_alphatest[1].Value = L"1";
-    //        int const n_define_wave = 1;
-    //        DxcDefine defines_wave[n_define_wave] = {};
-    //        defines_wave[0].Name = L"DISPLACEMENT_MAP";
-    //        defines_wave[0].Value = L"1";
-
-    //        dxc_lib->CreateIncludeHandler(&include_handler);
-    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-    //        dxc_res->GetStatus(&hr);
-    //        dxc_res->GetResult(&vertex_shader_code);
-    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, defines_wave, n_define_wave, include_handler, &dxc_res);
-    //        dxc_res->GetStatus(&hr);
-    //        dxc_res->GetResult(&vertex_shader_code_wave);
-    //        if (FAILED(hr)) {
-    //            if (dxc_res) {
-    //                IDxcBlobEncoding * errorsBlob = nullptr;
-    //                hr = dxc_res->GetErrorBuffer(&errorsBlob);
-    //                if (SUCCEEDED(hr) && errorsBlob) {
-    //                    OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-    //                    return(0);
-    //                }
-    //            }
-    //            // Handle compilation error...
-    //        }
-    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
-    //        dxc_res->GetStatus(&hr);
-    //        dxc_res->GetResult(&pixel_shader_code_opaque);
-    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
-    //        dxc_res->GetStatus(&hr);
-    //        dxc_res->GetResult(&pixel_shader_code_alphatest);
-    //        if (FAILED(hr)) {
-    //            if (dxc_res) {
-    //                IDxcBlobEncoding * errorsBlob = nullptr;
-    //                hr = dxc_res->GetErrorBuffer(&errorsBlob);
-    //                if (SUCCEEDED(hr) && errorsBlob) {
-    //                    OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-    //                    return(0);
-    //                }
-    //            }
-    //            // Handle compilation error...
-    //        }
-    //    }
-    //}
-
-
     {   // tree-sprite shaders
-        hr = dxc_lib->CreateBlobFromFile(tree_shader_path, &code_page, &shader_blob);
-        if (shader_blob) {
-            IDxcIncludeHandler * include_handler = nullptr;
-            int const n_define_alphatest = 2;
-            DxcDefine defines_alphatest[n_define_alphatest] = {};
-            defines_alphatest[0].Name = L"FOG";
-            defines_alphatest[0].Value = L"1";
-            defines_alphatest[1].Name = L"ALPHA_TEST";
-            defines_alphatest[1].Value = L"1";
+        compile_shader(tree_shader_path, _T("VS_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_TREE_VS]);
+        compile_shader(tree_shader_path, _T("GS_Main"), _T("gs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_TREE_GS]);
 
-            dxc_lib->CreateIncludeHandler(&include_handler);
-            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"VS_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&vertex_shader_code_tree);
-            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"GS_Main", L"gs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&geo_shader_code_tree);
-            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"PS_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&pixel_shader_code_tree);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
+        int const n_define_alphatest = 2;
+        DxcDefine defines_alphatest[n_define_alphatest] = {};
+        defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
+        defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
+        compile_shader(tree_shader_path, _T("PS_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_TREE_PS]);
     }
     {   // wave compute shaders
-        hr = dxc_lib->CreateBlobFromFile(wavesim_shader_path, &code_page, &shader_blob);
-        if (shader_blob) {
-            hr = dxc_compiler->Compile(shader_blob, wavesim_shader_path, L"update_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&compute_shader_code_update_wave);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-            hr = dxc_compiler->Compile(shader_blob, wavesim_shader_path, L"disturb_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&compute_shader_code_disturb_wave);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
+        compile_shader(wavesim_shader_path, _T("update_wave_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_UPDATE_WAVE_CS]);
+        compile_shader(wavesim_shader_path, _T("disturb_wave_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DISTURB_WAVE_CS]);
     }
+
     {   // blur compute-shaders
-        hr = dxc_lib->CreateBlobFromFile(blur_shader_path, &code_page, &shader_blob);
-        if (shader_blob) {
-            hr = dxc_compiler->Compile(shader_blob, blur_shader_path, L"horizontal_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&compute_shader_code_hor_blur);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-            hr = dxc_compiler->Compile(shader_blob, blur_shader_path, L"vertical_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&compute_shader_code_ver_blur);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
+        compile_shader(blur_shader_path, _T("horizontal_blur_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_HOR_BLUR_CS]);
+        compile_shader(blur_shader_path, _T("vertical_blur_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_VER_BLUR_CS]);
     }
     {   // composite shaders (vertex shader and pixel shader)
-        hr = dxc_lib->CreateBlobFromFile(composite_shader_path, &code_page, &shader_blob);
-        if (shader_blob) {
-            IDxcIncludeHandler * include_handler = nullptr;
-            dxc_lib->CreateIncludeHandler(&include_handler);
-            hr = dxc_compiler->Compile(shader_blob, composite_shader_path, L"composite_vs", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&vertex_shader_code_composite);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-            hr = dxc_compiler->Compile(shader_blob, composite_shader_path, L"composite_ps", L"ps_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&pixel_shader_code_composite);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
+        compile_shader(composite_shader_path, _T("composite_vs"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_COMPOSITE_VS]);
+        compile_shader(composite_shader_path, _T("composite_ps"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_COMPOSITE_PS]);
     }
     {   // sobel compute-shader
-        hr = dxc_lib->CreateBlobFromFile(sobel_shader_path, &code_page, &shader_blob);
-        if (shader_blob) {
-            IDxcIncludeHandler * include_handler = nullptr;
-            dxc_lib->CreateIncludeHandler(&include_handler);
-            hr = dxc_compiler->Compile(shader_blob, sobel_shader_path, L"sobel_cs", L"cs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&compute_shader_code_sobel);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
+        compile_shader(sobel_shader_path, _T("sobel_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SOBEL_CS]);
     }
-    _ASSERT_EXPR(vertex_shader_code, _T("invalid shader"));
-    _ASSERT_EXPR(vertex_shader_code_wave, "invalid shader");
-    _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
-    _ASSERT_EXPR(pixel_shader_code_alphatest, "invalid shader");
-    _ASSERT_EXPR(vertex_shader_code_tree, "invalid shader");
-    _ASSERT_EXPR(geo_shader_code_tree, "invalid shader");
-    _ASSERT_EXPR(pixel_shader_code_tree, "invalid shader");
-    _ASSERT_EXPR(compute_shader_code_update_wave, "invalid shader");
-    _ASSERT_EXPR(compute_shader_code_disturb_wave, "invalid shader");
-    _ASSERT_EXPR(compute_shader_code_hor_blur, "invalid shader");
-    _ASSERT_EXPR(compute_shader_code_ver_blur, "invalid shader");
-    _ASSERT_EXPR(vertex_shader_code_composite, "invalid shader");
-    _ASSERT_EXPR(pixel_shader_code_composite, "invalid shader");
-    _ASSERT_EXPR(compute_shader_code_sobel, "invalid shader");
-
 #pragma endregion
 
 #pragma region PSO_Creation
-    create_pso(
-        render_ctx,
-        vertex_shader_code,
-        vertex_shader_code_wave,
-        pixel_shader_code_opaque,
-        pixel_shader_code_alphatest,
-        vertex_shader_code_tree,
-        geo_shader_code_tree,
-        pixel_shader_code_tree,
-        compute_shader_code_update_wave,
-        compute_shader_code_disturb_wave,
-        compute_shader_code_hor_blur,
-        compute_shader_code_ver_blur,
-        vertex_shader_code_composite,
-        pixel_shader_code_composite,
-        compute_shader_code_sobel
-    );
+    create_pso(render_ctx);
 #pragma endregion PSO_Creation
 
 #pragma region Shapes_And_Renderitem_Creation
@@ -3231,26 +2971,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->geom[i].ib_gpu->Release();
     }   // is this a bug in d3d12sdklayers.dll ?
 
-    for (int i = 0; i < _COUNT_RENDERCOMPUTE_LAYER; ++i) {
+    for (int i = 0; i < _COUNT_RENDERCOMPUTE_LAYER; ++i)
         render_ctx->psos[i]->Release();
-    }
 
-    pixel_shader_code_tree->Release();
-    geo_shader_code_tree->Release();
-    vertex_shader_code_tree->Release();
-    pixel_shader_code_alphatest->Release();
-    pixel_shader_code_opaque->Release();
-    vertex_shader_code->Release();
-    vertex_shader_code_wave->Release();
-    compute_shader_code_update_wave->Release();
-    compute_shader_code_disturb_wave->Release();
-    compute_shader_code_hor_blur->Release();
-    compute_shader_code_ver_blur->Release();
-    vertex_shader_code_composite->Release();
-    pixel_shader_code_composite->Release();
-    compute_shader_code_sobel->Release();
-
-    shader_blob->Release();
+    for (unsigned i = 0; i < _COUNT_SHADERS; ++i)
+        render_ctx->shaders[i]->Release();
 
     render_ctx->root_signature_postprocessing_sobel->Release();
     render_ctx->root_signature_postprocessing_blur->Release();
@@ -3259,15 +2984,16 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     SobelFilter_Deinit(&global_sobel_filter);
     OffscreenRenderTarget_Deinit(&global_offscreen_rendertarget);
+
     BlurFilter_Deinit(global_blur_filter);
     ::free(blur_memory);
+
     GpuWaves_Deinit(waves);
     ::free(wave_memory);
 
     // release swapchain backbuffers resources
-    for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i) {
+    for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i)
         render_ctx->render_targets[i]->Release();
-    }
 
     render_ctx->dsv_heap->Release();
     render_ctx->rtv_heap->Release();
