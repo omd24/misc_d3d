@@ -605,94 +605,84 @@ create_treesprites_geometry (D3DRenderContext * render_ctx) {
     render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0] = submesh;
 }
 static void
-create_render_items (
-    RenderItemArray * all_ritems,
-    RenderItemArray * opaque_ritems,
-    RenderItemArray * transparent_ritems,
-    RenderItemArray * alphatested_ritems,
-    RenderItemArray * alphatested_treesprites_ritems,
-    RenderItemArray * gpu_waves_ritems,
-    GpuWaves * wave,
-    MeshGeometry * box_geom, MeshGeometry * water_geom, MeshGeometry * grid_geom, MeshGeometry * treesprites_geom,
-    Material materials []
-) {
-    all_ritems->ritems[RITEM_WATER].world = Identity4x4();
-    all_ritems->ritems[RITEM_WATER].tex_transform = Identity4x4();
-    XMStoreFloat4x4(&all_ritems->ritems[RITEM_WATER].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    all_ritems->ritems[RITEM_WATER].obj_cbuffer_index = 0;
-    all_ritems->ritems[RITEM_WATER].mat = &materials[MAT_WATER];
-    all_ritems->ritems[RITEM_WATER].geometry = water_geom;
-    all_ritems->ritems[RITEM_WATER].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    all_ritems->ritems[RITEM_WATER].index_count = water_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_WATER].start_index_loc = water_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_WATER].base_vertex_loc = water_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_WATER].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_WATER].grid_spatial_step = wave->spatial_step;
-    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size.x = 1.0f / wave->ncol;
-    all_ritems->ritems[RITEM_WATER].displacement_map_texel_size.y = 1.0f / wave->nrow;
-    all_ritems->ritems[RITEM_WATER].initialized = true;
-    all_ritems->size++;
-    transparent_ritems->ritems[0] = all_ritems->ritems[RITEM_WATER];
-    transparent_ritems->size++;
-    gpu_waves_ritems->ritems[0] = all_ritems->ritems[RITEM_WATER];
-    gpu_waves_ritems->size++;
+create_render_items (D3DRenderContext * render_ctx, GpuWaves * wave) {
+    render_ctx->all_ritems.ritems[RITEM_WATER].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_WATER].tex_transform = Identity4x4();
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_WATER].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_WATER].obj_cbuffer_index = 0;
+    render_ctx->all_ritems.ritems[RITEM_WATER].mat = &render_ctx->materials[MAT_WATER];
+    render_ctx->all_ritems.ritems[RITEM_WATER].geometry = &render_ctx->geom[GEOM_WATER];
+    render_ctx->all_ritems.ritems[RITEM_WATER].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_WATER].index_count = render_ctx->geom[GEOM_WATER].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_WATER].start_index_loc = render_ctx->geom[GEOM_WATER].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_WATER].base_vertex_loc = render_ctx->geom[GEOM_WATER].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_WATER].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_WATER].grid_spatial_step = wave->spatial_step;
+    render_ctx->all_ritems.ritems[RITEM_WATER].displacement_map_texel_size.x = 1.0f / wave->ncol;
+    render_ctx->all_ritems.ritems[RITEM_WATER].displacement_map_texel_size.y = 1.0f / wave->nrow;
+    render_ctx->all_ritems.ritems[RITEM_WATER].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->transparent_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_WATER];
+    render_ctx->transparent_ritems.size++;
+    render_ctx->gpu_waves_rtimes.ritems[0] = render_ctx->all_ritems.ritems[RITEM_WATER];
+    render_ctx->gpu_waves_rtimes.size++;
 
-    all_ritems->ritems[RITEM_GRID].world = Identity4x4();
-    all_ritems->ritems[RITEM_GRID].tex_transform = Identity4x4();
-    XMStoreFloat4x4(&all_ritems->ritems[RITEM_GRID].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    all_ritems->ritems[RITEM_GRID].obj_cbuffer_index = 1;
-    all_ritems->ritems[RITEM_GRID].mat = &materials[MAT_GRASS];
-    all_ritems->ritems[RITEM_GRID].geometry = grid_geom;
-    all_ritems->ritems[RITEM_GRID].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    all_ritems->ritems[RITEM_GRID].index_count = grid_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_GRID].start_index_loc = grid_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_GRID].base_vertex_loc = grid_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_GRID].grid_spatial_step = 1;
-    all_ritems->ritems[RITEM_GRID].displacement_map_texel_size = {1.0f, 1.0f};
-    all_ritems->ritems[RITEM_GRID].initialized = true;
-    all_ritems->size++;
-    opaque_ritems->ritems[0] = all_ritems->ritems[RITEM_GRID];
-    opaque_ritems->size++;
+    render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform = Identity4x4();
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
+    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_GRID].mat = &render_ctx->materials[MAT_GRASS];
+    render_ctx->all_ritems.ritems[RITEM_GRID].geometry = &render_ctx->geom[GEOM_GRID];
+    render_ctx->all_ritems.ritems[RITEM_GRID].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_GRID].index_count = render_ctx->geom[GEOM_GRID].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_GRID].start_index_loc = render_ctx->geom[GEOM_GRID].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_GRID].base_vertex_loc = render_ctx->geom[GEOM_GRID].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_GRID].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_GRID].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_GRID].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_GRID];
+    render_ctx->opaque_ritems.size++;
 
-    all_ritems->ritems[RITEM_BOX].world = Identity4x4();
-    XMStoreFloat4x4(&all_ritems->ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
-    all_ritems->ritems[RITEM_BOX].tex_transform = Identity4x4();
-    all_ritems->ritems[RITEM_BOX].obj_cbuffer_index = 2;
-    all_ritems->ritems[RITEM_BOX].geometry = box_geom;
-    all_ritems->ritems[RITEM_BOX].mat = &materials[MAT_WOOD_CRATE];
-    all_ritems->ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    all_ritems->ritems[RITEM_BOX].index_count = box_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_BOX].start_index_loc = box_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_BOX].base_vertex_loc = box_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_BOX].grid_spatial_step = 1;
-    all_ritems->ritems[RITEM_BOX].displacement_map_texel_size = {1.0f, 1.0f};
-    all_ritems->ritems[RITEM_BOX].initialized = true;
-    all_ritems->size++;
-    alphatested_ritems->ritems[0] = all_ritems->ritems[RITEM_BOX];
-    alphatested_ritems->size++;
+    render_ctx->all_ritems.ritems[RITEM_BOX].world = Identity4x4();
+    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
+    render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_BOX];
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WOOD_CRATE];
+    render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_BOX].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_BOX].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_BOX].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_BOX].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_BOX].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->alphatested_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_BOX];
+    render_ctx->alphatested_ritems.size++;
 
-    all_ritems->ritems[RITEM_TREESPRITE].world = Identity4x4();
-    all_ritems->ritems[RITEM_TREESPRITE].tex_transform = Identity4x4();
-    all_ritems->ritems[RITEM_TREESPRITE].obj_cbuffer_index = 3;
-    all_ritems->ritems[RITEM_TREESPRITE].geometry = treesprites_geom;
-    all_ritems->ritems[RITEM_TREESPRITE].mat = &materials[MAT_TREE_SPRITE];
-    all_ritems->ritems[RITEM_TREESPRITE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
-    all_ritems->ritems[RITEM_TREESPRITE].index_count = treesprites_geom->submesh_geoms[0].index_count;
-    all_ritems->ritems[RITEM_TREESPRITE].start_index_loc = treesprites_geom->submesh_geoms[0].start_index_location;
-    all_ritems->ritems[RITEM_TREESPRITE].base_vertex_loc = treesprites_geom->submesh_geoms[0].base_vertex_location;
-    all_ritems->ritems[RITEM_TREESPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_TREESPRITE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    all_ritems->ritems[RITEM_TREESPRITE].grid_spatial_step = 1;
-    all_ritems->ritems[RITEM_TREESPRITE].displacement_map_texel_size = {1.0f, 1.0f};
-    all_ritems->ritems[RITEM_TREESPRITE].initialized = true;
-    all_ritems->size++;
-    alphatested_treesprites_ritems->ritems[0] = all_ritems->ritems[RITEM_TREESPRITE];
-    alphatested_treesprites_ritems->size++;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].obj_cbuffer_index = 3;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].geometry = &render_ctx->geom[GEOM_TREESPRITE];
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].mat = &render_ctx->materials[MAT_TREE_SPRITE];
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].index_count = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].start_index_loc = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].base_vertex_loc = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->alphatested_treesprites_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_TREESPRITE];
+    render_ctx->alphatested_treesprites_ritems.size++;
 }
 // -- indexed drawing
 static void
@@ -2694,7 +2684,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     TCHAR blur_shader_path [] = _T("./shaders/blur.hlsl");
     TCHAR sobel_shader_path []= _T("./shaders/sobel.hlsl");
     TCHAR composite_shader_path [] = _T("./shaders/composite.hlsl");
-    
+
     {   // standard shaders
         compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
 
@@ -2740,11 +2730,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     {   // sobel compute-shader
         compile_shader(sobel_shader_path, _T("sobel_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SOBEL_CS]);
     }
-#pragma endregion
+#pragma endregion Compile Shaders
 
-#pragma region PSO_Creation
     create_pso(render_ctx);
-#pragma endregion PSO_Creation
 
 #pragma region Shapes_And_Renderitem_Creation
     create_land_geometry(render_ctx);
@@ -2752,20 +2740,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     create_treesprites_geometry(render_ctx);
     create_shape_geometry(render_ctx);
     create_materials(render_ctx->materials);
-    create_render_items(
-        &render_ctx->all_ritems,
-        &render_ctx->opaque_ritems,
-        &render_ctx->transparent_ritems,
-        &render_ctx->alphatested_ritems,
-        &render_ctx->alphatested_treesprites_ritems,
-        &render_ctx->gpu_waves_rtimes,
-        waves,
-        &render_ctx->geom[GEOM_BOX],
-        &render_ctx->geom[GEOM_WATER],
-        &render_ctx->geom[GEOM_GRID],
-        &render_ctx->geom[GEOM_TREESPRITE],
-        render_ctx->materials
-    );
+    create_render_items(render_ctx, waves);
 
 #pragma endregion Shapes_And_Renderitem_Creation
 
