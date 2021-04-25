@@ -65,6 +65,24 @@ enum ALL_RENDERITEMS {
 
     _COUNT_RENDERITEM
 };
+enum SHADERS_CODE {
+    SHADER_DEFAULT_VS = 0,
+    SHADER_WAVE_VS = 1,
+    SHADER_OPAQUE_PS = 2,
+    SHADER_ALPHATEST_PS = 3,
+    SHADER_TREE_VS = 4,
+    SHADER_TREE_GS = 5,
+    SHADER_TREE_PS = 6,
+    SHADER_UPDATE_WAVE_CS = 7,
+    SHADER_DISTURB_WAVE_CS = 8,
+    SHADER_HOR_BLUR_CS = 9,
+    SHADER_VER_BLUR_CS = 10,
+    SHADER_COMPOSITE_VS = 11,
+    SHADER_COMPISITE_PS = 12,
+    SHADER_SOBEL_CS = 13,
+
+    _COUNT_SHADERS
+};
 enum GEOM_INDEX {
     GEOM_BOX = 0,
     GEOM_WATER = 1,
@@ -210,6 +228,7 @@ struct D3DRenderContext {
 
     Material                        materials[_COUNT_MATERIAL];
     Texture                         textures[_COUNT_TEX];
+    IDxcBlob *                      shaders[_COUNT_SHADERS];
 };
 static void
 load_texture (
@@ -1207,6 +1226,43 @@ create_root_signature_postprocessing_sobel (ID3D12Device * device, ID3D12RootSig
         0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
         IID_PPV_ARGS(postprocessing_root_signature)
     );
+}
+static HRESULT
+compile_shader(wchar_t * path, wchar_t const * entry_point, wchar_t const * shader_model, DxcDefine defines [], int n_defines, IDxcBlob ** out_shader_ptr) {
+    // -- using DXC shader compiler [https://asawicki.info/news_1719_two_shader_compilers_of_direct3d_12]
+    HRESULT ret = E_FAIL;
+
+    IDxcLibrary * dxc_lib = nullptr;
+    ret = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&dxc_lib));
+    // if (FAILED(ret)) Handle error
+    IDxcCompiler * dxc_compiler = nullptr;
+    ret = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
+    uint32_t code_page = CP_UTF8;
+    IDxcBlobEncoding * shader_blob_encoding = nullptr;
+    IDxcOperationResult * dxc_res = nullptr;
+
+    ret = dxc_lib->CreateBlobFromFile(path, &code_page, &shader_blob_encoding);
+    if (shader_blob_encoding) {
+        IDxcIncludeHandler * include_handler = nullptr;
+        dxc_lib->CreateIncludeHandler(&include_handler);
+
+        ret = dxc_compiler->Compile(shader_blob_encoding, path, entry_point, shader_model, nullptr, 0, defines, n_defines, include_handler, &dxc_res);
+        dxc_res->GetStatus(&ret);
+        dxc_res->GetResult(out_shader_ptr);
+        if (FAILED(ret)) {
+            if (dxc_res) {
+                IDxcBlobEncoding * error_blob_encoding = nullptr;
+                ret = dxc_res->GetErrorBuffer(&error_blob_encoding);
+                if (SUCCEEDED(ret) && error_blob_encoding) {
+                    OutputDebugStringA((const char*)error_blob_encoding->GetBufferPointer());
+                    return(0);
+                }
+            }
+            // Handle compilation error...
+        }
+    }
+    _ASSERT_EXPR(*out_shader_ptr, _T("Shader Compilation Failed"));
+    return ret;
 }
 static void
 create_pso (
@@ -2642,7 +2698,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     // Load and compile shaders
 
-#pragma region Compile_Shaders
+#pragma region Compile Shaders
 // -- using DXC shader compiler [from https://asawicki.info/news_1719_two_shader_compilers_of_direct3d_12]
 
     IDxcLibrary * dxc_lib = nullptr;
@@ -2652,17 +2708,14 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
     // if (FAILED(hr)) Handle error
 
-    wchar_t const * shaders_path = L"./shaders/default.hlsl";
-    wchar_t const * tree_shader_path = L"./shaders/tree_sprite.hlsl";
-    wchar_t const * wavesim_shader_path = L"./shaders/wave_sim.hlsl";
-    wchar_t const * blur_shader_path = L"./shaders/blur.hlsl";
-    wchar_t const * sobel_shader_path = L"./shaders/sobel.hlsl";
-    wchar_t const * composite_shader_path = L"./shaders/composite.hlsl";
+    wchar_t shaders_path [] = L"./shaders/default.hlsl";
+    wchar_t tree_shader_path []= L"./shaders/tree_sprite.hlsl";
+    wchar_t wavesim_shader_path []= L"./shaders/wave_sim.hlsl";
+    wchar_t blur_shader_path [] = L"./shaders/blur.hlsl";
+    wchar_t sobel_shader_path []= L"./shaders/sobel.hlsl";
+    wchar_t composite_shader_path [] = L"./shaders/composite.hlsl";
     uint32_t code_page = CP_UTF8;
     IDxcBlobEncoding * shader_blob = nullptr;
-    IDxcBlobEncoding * shader_blob_trees = nullptr;   // TODO(omid): do we need different blobs
-    IDxcBlobEncoding * shader_blob_waves = nullptr;
-    IDxcBlobEncoding * shader_blob_blur = nullptr;
     IDxcOperationResult * dxc_res = nullptr;
     IDxcBlob * vertex_shader_code = nullptr;
     IDxcBlob * vertex_shader_code_wave = nullptr;
@@ -2678,66 +2731,92 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     IDxcBlob * vertex_shader_code_composite = nullptr;
     IDxcBlob * pixel_shader_code_composite = nullptr;
     IDxcBlob * compute_shader_code_sobel = nullptr;
+
+
     {   // standard shaders
-        hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
+
+        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &vertex_shader_code);
+
+        int const n_define_wave = 1;
+        DxcDefine defines_wave[n_define_wave] = {};
+        defines_wave[0] = {.Name = _T("DISPLACEMENT_MAP"), .Value = _T("1")};
+        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), defines_wave, n_define_wave, &vertex_shader_code_wave);
+
+        int const n_define_fog = 1;
+        DxcDefine defines_fog[n_define_fog] = {};
+        defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
+        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &pixel_shader_code_opaque);
+
+        int const n_define_alphatest = 2;
+        DxcDefine defines_alphatest[n_define_alphatest] = {};
+        defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
+        defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
+        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &pixel_shader_code_alphatest);
+
+    }
+
+    //{   // standard shaders
+    //    hr = dxc_lib->CreateBlobFromFile(shaders_path, &code_page, &shader_blob);
+    //    if (shader_blob) {
+    //        IDxcIncludeHandler * include_handler = nullptr;
+    //        int const n_define_fog = 1;
+    //        DxcDefine defines_fog[n_define_fog] = {};
+    //        defines_fog[0].Name = L"FOG";
+    //        defines_fog[0].Value = L"1";
+    //        int const n_define_alphatest = 2;
+    //        DxcDefine defines_alphatest[n_define_alphatest] = {};
+    //        defines_alphatest[0].Name = L"FOG";
+    //        defines_alphatest[0].Value = L"1";
+    //        defines_alphatest[1].Name = L"ALPHA_TEST";
+    //        defines_alphatest[1].Value = L"1";
+    //        int const n_define_wave = 1;
+    //        DxcDefine defines_wave[n_define_wave] = {};
+    //        defines_wave[0].Name = L"DISPLACEMENT_MAP";
+    //        defines_wave[0].Value = L"1";
+
+    //        dxc_lib->CreateIncludeHandler(&include_handler);
+    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+    //        dxc_res->GetStatus(&hr);
+    //        dxc_res->GetResult(&vertex_shader_code);
+    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, defines_wave, n_define_wave, include_handler, &dxc_res);
+    //        dxc_res->GetStatus(&hr);
+    //        dxc_res->GetResult(&vertex_shader_code_wave);
+    //        if (FAILED(hr)) {
+    //            if (dxc_res) {
+    //                IDxcBlobEncoding * errorsBlob = nullptr;
+    //                hr = dxc_res->GetErrorBuffer(&errorsBlob);
+    //                if (SUCCEEDED(hr) && errorsBlob) {
+    //                    OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+    //                    return(0);
+    //                }
+    //            }
+    //            // Handle compilation error...
+    //        }
+    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
+    //        dxc_res->GetStatus(&hr);
+    //        dxc_res->GetResult(&pixel_shader_code_opaque);
+    //        hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
+    //        dxc_res->GetStatus(&hr);
+    //        dxc_res->GetResult(&pixel_shader_code_alphatest);
+    //        if (FAILED(hr)) {
+    //            if (dxc_res) {
+    //                IDxcBlobEncoding * errorsBlob = nullptr;
+    //                hr = dxc_res->GetErrorBuffer(&errorsBlob);
+    //                if (SUCCEEDED(hr) && errorsBlob) {
+    //                    OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
+    //                    return(0);
+    //                }
+    //            }
+    //            // Handle compilation error...
+    //        }
+    //    }
+    //}
+
+
+    {   // tree-sprite shaders
+        hr = dxc_lib->CreateBlobFromFile(tree_shader_path, &code_page, &shader_blob);
         if (shader_blob) {
             IDxcIncludeHandler * include_handler = nullptr;
-            int const n_define_fog = 1;
-            DxcDefine defines_fog[n_define_fog] = {};
-            defines_fog[0].Name = L"FOG";
-            defines_fog[0].Value = L"1";
-            int const n_define_alphatest = 2;
-            DxcDefine defines_alphatest[n_define_alphatest] = {};
-            defines_alphatest[0].Name = L"FOG";
-            defines_alphatest[0].Value = L"1";
-            defines_alphatest[1].Name = L"ALPHA_TEST";
-            defines_alphatest[1].Value = L"1";
-            int const n_define_wave = 1;
-            DxcDefine defines_wave[n_define_wave] = {};
-            defines_wave[0].Name = L"DISPLACEMENT_MAP";
-            defines_wave[0].Value = L"1";
-
-            dxc_lib->CreateIncludeHandler(&include_handler);
-            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&vertex_shader_code);
-            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"VertexShader_Main", L"vs_6_0", nullptr, 0, defines_wave, n_define_wave, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&vertex_shader_code_wave);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_fog, n_define_fog, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&pixel_shader_code_opaque);
-            hr = dxc_compiler->Compile(shader_blob, shaders_path, L"PixelShader_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
-            dxc_res->GetStatus(&hr);
-            dxc_res->GetResult(&pixel_shader_code_alphatest);
-            if (FAILED(hr)) {
-                if (dxc_res) {
-                    IDxcBlobEncoding * errorsBlob = nullptr;
-                    hr = dxc_res->GetErrorBuffer(&errorsBlob);
-                    if (SUCCEEDED(hr) && errorsBlob) {
-                        OutputDebugStringA((const char*)errorsBlob->GetBufferPointer());
-                        return(0);
-                    }
-                }
-                // Handle compilation error...
-            }
-        }
-    }
-    {   // tree-sprite shaders
-        hr = dxc_lib->CreateBlobFromFile(tree_shader_path, &code_page, &shader_blob_trees);
-        if (shader_blob_trees) {
-            IDxcIncludeHandler * include_handler = nullptr;
             int const n_define_alphatest = 2;
             DxcDefine defines_alphatest[n_define_alphatest] = {};
             defines_alphatest[0].Name = L"FOG";
@@ -2746,13 +2825,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             defines_alphatest[1].Value = L"1";
 
             dxc_lib->CreateIncludeHandler(&include_handler);
-            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"VS_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"VS_Main", L"vs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&vertex_shader_code_tree);
-            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"GS_Main", L"gs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
+            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"GS_Main", L"gs_6_0", nullptr, 0, nullptr, 0, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&geo_shader_code_tree);
-            hr = dxc_compiler->Compile(shader_blob_trees, tree_shader_path, L"PS_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
+            hr = dxc_compiler->Compile(shader_blob, tree_shader_path, L"PS_Main", L"ps_6_0", nullptr, 0, defines_alphatest, n_define_alphatest, include_handler, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&pixel_shader_code_tree);
             if (FAILED(hr)) {
@@ -2769,9 +2848,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         }
     }
     {   // wave compute shaders
-        hr = dxc_lib->CreateBlobFromFile(wavesim_shader_path, &code_page, &shader_blob_waves);
-        if (shader_blob_waves) {
-            hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"update_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+        hr = dxc_lib->CreateBlobFromFile(wavesim_shader_path, &code_page, &shader_blob);
+        if (shader_blob) {
+            hr = dxc_compiler->Compile(shader_blob, wavesim_shader_path, L"update_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_update_wave);
             if (FAILED(hr)) {
@@ -2785,7 +2864,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 }
                 // Handle compilation error...
             }
-            hr = dxc_compiler->Compile(shader_blob_waves, wavesim_shader_path, L"disturb_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            hr = dxc_compiler->Compile(shader_blob, wavesim_shader_path, L"disturb_wave_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_disturb_wave);
             if (FAILED(hr)) {
@@ -2802,9 +2881,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         }
     }
     {   // blur compute-shaders
-        hr = dxc_lib->CreateBlobFromFile(blur_shader_path, &code_page, &shader_blob_blur);
-        if (shader_blob_blur) {
-            hr = dxc_compiler->Compile(shader_blob_blur, blur_shader_path, L"horizontal_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+        hr = dxc_lib->CreateBlobFromFile(blur_shader_path, &code_page, &shader_blob);
+        if (shader_blob) {
+            hr = dxc_compiler->Compile(shader_blob, blur_shader_path, L"horizontal_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_hor_blur);
             if (FAILED(hr)) {
@@ -2818,7 +2897,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 }
                 // Handle compilation error...
             }
-            hr = dxc_compiler->Compile(shader_blob_blur, blur_shader_path, L"vertical_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
+            hr = dxc_compiler->Compile(shader_blob, blur_shader_path, L"vertical_blur_cs", L"cs_6_0", nullptr, 0, nullptr, 0, nullptr, &dxc_res);
             dxc_res->GetStatus(&hr);
             dxc_res->GetResult(&compute_shader_code_ver_blur);
             if (FAILED(hr)) {
@@ -2890,7 +2969,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
             }
         }
     }
-    _ASSERT_EXPR(vertex_shader_code, "invalid shader");
+    _ASSERT_EXPR(vertex_shader_code, _T("invalid shader"));
     _ASSERT_EXPR(vertex_shader_code_wave, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_opaque, "invalid shader");
     _ASSERT_EXPR(pixel_shader_code_alphatest, "invalid shader");
