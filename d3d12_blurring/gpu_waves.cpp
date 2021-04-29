@@ -150,18 +150,18 @@ GpuWaves_BuildDescriptors (
     wave->device->CreateUnorderedAccessView(wave->next_sol, NULL, &uav_desc, hcpu_descriptor);
 
     // save references to the gpu descriptors
-    wave->prev_sol_srv = hgpu_descriptor;
+    wave->prev_sol_hgpu_srv = hgpu_descriptor;
     hgpu_descriptor.ptr += descriptor_size;
-    wave->curr_sol_srv = hgpu_descriptor;
+    wave->curr_sol_hgpu_srv = hgpu_descriptor;
     hgpu_descriptor.ptr += descriptor_size;
-    wave->next_sol_srv = hgpu_descriptor;
+    wave->next_sol_hgpu_srv = hgpu_descriptor;
 
     hgpu_descriptor.ptr += descriptor_size;
-    wave->prev_sol_uav = hgpu_descriptor;
+    wave->prev_sol_hgpu_uav = hgpu_descriptor;
     hgpu_descriptor.ptr += descriptor_size;
-    wave->curr_sol_uav = hgpu_descriptor;
+    wave->curr_sol_hgpu_uav = hgpu_descriptor;
     hgpu_descriptor.ptr += descriptor_size;
-    wave->next_sol_uav = hgpu_descriptor;
+    wave->next_sol_hgpu_uav = hgpu_descriptor;
 }
 void
 GpuWaves_Update (
@@ -184,9 +184,9 @@ GpuWaves_Update (
         // set the update constants
         cmdlist->SetComputeRoot32BitConstants(0, 3, wave->k, 0);
 
-        cmdlist->SetComputeRootDescriptorTable(1, wave->prev_sol_uav);
-        cmdlist->SetComputeRootDescriptorTable(2, wave->curr_sol_uav);
-        cmdlist->SetComputeRootDescriptorTable(3, wave->next_sol_uav);
+        cmdlist->SetComputeRootDescriptorTable(1, wave->prev_sol_hgpu_uav);
+        cmdlist->SetComputeRootDescriptorTable(2, wave->curr_sol_hgpu_uav);
+        cmdlist->SetComputeRootDescriptorTable(3, wave->next_sol_hgpu_uav);
 
         // how many groups do we need to dispatch
         // note that nrow and ncol should be divisible by 16
@@ -209,15 +209,15 @@ GpuWaves_Update (
         wave->curr_sol = wave->next_sol;
         wave->next_sol = resource_temp;
 
-        D3D12_GPU_DESCRIPTOR_HANDLE srv_temp = wave->prev_sol_srv;
-        wave->prev_sol_srv = wave->curr_sol_srv;
-        wave->curr_sol_srv = wave->next_sol_srv;
-        wave->next_sol_srv = srv_temp;
+        D3D12_GPU_DESCRIPTOR_HANDLE srv_temp = wave->prev_sol_hgpu_srv;
+        wave->prev_sol_hgpu_srv = wave->curr_sol_hgpu_srv;
+        wave->curr_sol_hgpu_srv = wave->next_sol_hgpu_srv;
+        wave->next_sol_hgpu_srv = srv_temp;
 
-        D3D12_GPU_DESCRIPTOR_HANDLE uav_temp = wave->prev_sol_uav;
-        wave->prev_sol_uav = wave->curr_sol_uav;
-        wave->curr_sol_uav = wave->next_sol_uav;
-        wave->next_sol_uav = uav_temp;
+        D3D12_GPU_DESCRIPTOR_HANDLE uav_temp = wave->prev_sol_hgpu_uav;
+        wave->prev_sol_hgpu_uav = wave->curr_sol_hgpu_uav;
+        wave->curr_sol_hgpu_uav = wave->next_sol_hgpu_uav;
+        wave->next_sol_hgpu_uav = uav_temp;
 
         t = 0.0f; // reset time
 
@@ -240,7 +240,7 @@ GpuWaves_Disturb (
     UINT disturb_index[2] = {j, i};
     cmdlist->SetComputeRoot32BitConstants(0, 1, &magnitude, 3);
     cmdlist->SetComputeRoot32BitConstants(0, 2, disturb_index, 4);
-    cmdlist->SetComputeRootDescriptorTable(3, wave->curr_sol_uav);
+    cmdlist->SetComputeRootDescriptorTable(3, wave->curr_sol_hgpu_uav);
 
     // the curr sol is in GENERIC_READ state so it can be read by vertex shader
     // change it to UNORDERED_ACCESS for the compute shader.

@@ -14,13 +14,13 @@ struct GpuWaves {
 
     ID3D12Device * device;
 
-    D3D12_GPU_DESCRIPTOR_HANDLE prev_sol_srv;
-    D3D12_GPU_DESCRIPTOR_HANDLE curr_sol_srv;
-    D3D12_GPU_DESCRIPTOR_HANDLE next_sol_srv;
+    D3D12_GPU_DESCRIPTOR_HANDLE prev_sol_hgpu_srv;
+    D3D12_GPU_DESCRIPTOR_HANDLE curr_sol_hgpu_srv;
+    D3D12_GPU_DESCRIPTOR_HANDLE next_sol_hgpu_srv;
 
-    D3D12_GPU_DESCRIPTOR_HANDLE prev_sol_uav;
-    D3D12_GPU_DESCRIPTOR_HANDLE curr_sol_uav;
-    D3D12_GPU_DESCRIPTOR_HANDLE next_sol_uav;
+    D3D12_GPU_DESCRIPTOR_HANDLE prev_sol_hgpu_uav;
+    D3D12_GPU_DESCRIPTOR_HANDLE curr_sol_hgpu_uav;
+    D3D12_GPU_DESCRIPTOR_HANDLE next_sol_hgpu_uav;
 
     // extra resources for ping-ponging the textures
     ID3D12Resource * prev_sol;

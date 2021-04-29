@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "d3d12_billboarding", "d3d12
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "d3d12_blurring", "d3d12_blurring\d3d12_blurring.vcxproj", "{BA5D10CB-6FF4-4B62-B9A1-D1DAA65BA67E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "d3d12_tessellation", "d3d12_tessellation\d3d12_tessellation.vcxproj", "{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -41,6 +43,14 @@ Global
 		{BA5D10CB-6FF4-4B62-B9A1-D1DAA65BA67E}.Release|x64.Build.0 = Release|x64
 		{BA5D10CB-6FF4-4B62-B9A1-D1DAA65BA67E}.Release|x86.ActiveCfg = Release|Win32
 		{BA5D10CB-6FF4-4B62-B9A1-D1DAA65BA67E}.Release|x86.Build.0 = Release|Win32
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Debug|x64.ActiveCfg = Debug|x64
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Debug|x64.Build.0 = Debug|x64
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Debug|x86.ActiveCfg = Debug|Win32
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Debug|x86.Build.0 = Debug|Win32
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Release|x64.ActiveCfg = Release|x64
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Release|x64.Build.0 = Release|x64
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Release|x86.ActiveCfg = Release|Win32
+		{B31162CA-F9F4-4DFF-BBF6-1ACB17DC5F8D}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

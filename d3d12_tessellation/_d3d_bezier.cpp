@@ -10,22 +10,9 @@
 #include "headers/game_timer.h"
 #include "headers/dds_loader.h"
 
-#include "offscreen_render_target.h"
-#include "gpu_waves.h"
-#include "blur_filter.h"
-#include "sobel_filter.h"
-
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_win32.h>
 #include <imgui/imgui_impl_dx12.h>
-
-#include <time.h>
-
-#if !defined(NDEBUG) && !defined(_DEBUG)
-#error "Define at least one."
-#elif defined(NDEBUG) && defined(_DEBUG)
-#error "Define at most one."
-#endif
 
 #if defined(_DEBUG)
 #define ENABLE_DEBUG_LAYER 1
@@ -34,6 +21,7 @@
 #endif
 
 #define ENABLE_DEARIMGUI
+
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
 #pragma warning (disable: 6011)     // dereferencing a potentially null pointer
@@ -44,68 +32,32 @@
 
 enum RENDER_LAYER : int {
     LAYER_OPAQUE = 0,
-    LAYER_TRANSPARENT = 1,
-    LAYER_ALPHATESTED = 2,
-    LAYER_ALPHATESTED_TREESPRITES = 3,
-    LAYER_GPU_WAVES_RENDER = 4,
-    LAYER_GPU_WAVES_DISTURB = 5,
-    LAYER_GPU_WAVES_UPDATE = 6,
-    LAYER_HOR_BLUR = 7,
-    LAYER_VER_BLUR = 8,
-    LAYER_SOBEL = 9,
-    LAYER_COMPISITE = 10,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_WATER = 0,
-    RITEM_GRID = 1,
-    RITEM_BOX = 2,
-    RITEM_TREESPRITE = 3,
+    RITEM_BOX = 0,
 
     _COUNT_RENDERITEM
 };
 enum SHADERS_CODE {
     SHADER_DEFAULT_VS = 0,
-    SHADER_WAVE_VS = 1,
-    SHADER_OPAQUE_PS = 2,
-    SHADER_ALPHATEST_PS = 3,
-    SHADER_TREE_VS = 4,
-    SHADER_TREE_GS = 5,
-    SHADER_TREE_PS = 6,
-    SHADER_UPDATE_WAVE_CS = 7,
-    SHADER_DISTURB_WAVE_CS = 8,
-    SHADER_HOR_BLUR_CS = 9,
-    SHADER_VER_BLUR_CS = 10,
-    SHADER_COMPOSITE_VS = 11,
-    SHADER_COMPOSITE_PS = 12,
-    SHADER_SOBEL_CS = 13,
+    SHADER_OPAQUE_PS = 1,
 
     _COUNT_SHADERS
 };
 enum GEOM_INDEX {
     GEOM_BOX = 0,
-    GEOM_WATER = 1,
-    GEOM_GRID = 2,
-    GEOM_TREESPRITE = 3,
 
     _COUNT_GEOM
 };
 enum MAT_INDEX {
     MAT_WOOD_CRATE = 0,
-    MAT_GRASS = 1,
-    MAT_WATER = 2,
-    MAT_WIRED_CRATE = 3,
-    MAT_TREE_SPRITE = 4,
 
     _COUNT_MATERIAL
 };
 enum TEX_INDEX {
     TEX_CRATE01 = 0,
-    TEX_WATER = 1,
-    TEX_GRASS = 2,
-    TEX_WIREFENCE = 3,
-    TEX_TREEARRAY = 4,
 
     _COUNT_TEX
 };
@@ -148,10 +100,6 @@ bool global_paused;
 bool global_resizing;
 bool global_mouse_active;
 SceneContext global_scene_ctx;
-BlurFilter * global_blur_filter;
-
-SobelFilter global_sobel_filter = {};
-OffscreenRenderTarget global_offscreen_rendertarget = {};
 
 #if defined(ENABLE_DEARIMGUI)
 bool global_imgui_enabled = true;
@@ -182,9 +130,6 @@ struct D3DRenderContext {
     IDXGISwapChain *                swapchain;
     ID3D12Device *                  device;
     ID3D12RootSignature *           root_signature;
-    ID3D12RootSignature *           root_signature_waves;
-    ID3D12RootSignature *           root_signature_postprocessing_blur;
-    ID3D12RootSignature *           root_signature_postprocessing_sobel;
     ID3D12PipelineState *           psos[_COUNT_RENDERCOMPUTE_LAYER];
 
     // Command objects
@@ -206,10 +151,6 @@ struct D3DRenderContext {
     RenderItemArray                 all_ritems;
     // Render items divided by PSO.
     RenderItemArray                 opaque_ritems;
-    RenderItemArray                 transparent_ritems;
-    RenderItemArray                 alphatested_ritems;
-    RenderItemArray                 alphatested_treesprites_ritems;
-    RenderItemArray                 gpu_waves_rtimes;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -295,50 +236,15 @@ load_texture (
 }
 static void
 create_materials (Material out_materials []) {
-    strcpy_s(out_materials[MAT_GRASS].name, "grass");
-    out_materials[MAT_GRASS].mat_cbuffer_index = 0;
-    out_materials[MAT_GRASS].diffuse_srvheap_index = 0;
-    out_materials[MAT_GRASS].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_GRASS].fresnel_r0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
-    out_materials[MAT_GRASS].roughness = 0.125f;
-    out_materials[MAT_GRASS].mat_transform = Identity4x4();
-    out_materials[MAT_GRASS].n_frames_dirty = NUM_QUEUING_FRAMES;
-
-    strcpy_s(out_materials[MAT_WATER].name, "water");
-    out_materials[MAT_WATER].mat_cbuffer_index = 1;
-    out_materials[MAT_WATER].diffuse_srvheap_index = 1;
-    out_materials[MAT_WATER].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 0.5f);
-    out_materials[MAT_WATER].fresnel_r0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
-    out_materials[MAT_WATER].roughness = 0.0f;
-    out_materials[MAT_WATER].mat_transform = Identity4x4();
-    out_materials[MAT_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
 
     strcpy_s(out_materials[MAT_WOOD_CRATE].name, "wood_crate");
-    out_materials[MAT_WOOD_CRATE].mat_cbuffer_index = 2;
-    out_materials[MAT_WOOD_CRATE].diffuse_srvheap_index = 2;
+    out_materials[MAT_WOOD_CRATE].mat_cbuffer_index = 0;
+    out_materials[MAT_WOOD_CRATE].diffuse_srvheap_index = 0;
     out_materials[MAT_WOOD_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
     out_materials[MAT_WOOD_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
     out_materials[MAT_WOOD_CRATE].roughness = 0.2f;
     out_materials[MAT_WOOD_CRATE].mat_transform = Identity4x4();
     out_materials[MAT_WOOD_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
-
-    strcpy_s(out_materials[MAT_WIRED_CRATE].name, "wired_crate");
-    out_materials[MAT_WIRED_CRATE].mat_cbuffer_index = 3;
-    out_materials[MAT_WIRED_CRATE].diffuse_srvheap_index = 3;
-    out_materials[MAT_WIRED_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WIRED_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WIRED_CRATE].roughness = 0.2f;
-    out_materials[MAT_WIRED_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WIRED_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
-
-    strcpy_s(out_materials[MAT_TREE_SPRITE].name, "tree_sprites");
-    out_materials[MAT_TREE_SPRITE].mat_cbuffer_index = 4;
-    out_materials[MAT_TREE_SPRITE].diffuse_srvheap_index = 4;
-    out_materials[MAT_TREE_SPRITE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_TREE_SPRITE].fresnel_r0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
-    out_materials[MAT_TREE_SPRITE].roughness = 0.125f;
-    out_materials[MAT_TREE_SPRITE].mat_transform = Identity4x4();
-    out_materials[MAT_TREE_SPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static float
 calc_hill_height (float x, float z) {
@@ -423,234 +329,11 @@ create_shape_geometry (D3DRenderContext * render_ctx) {
     free(vertices);
 }
 static void
-create_land_geometry (D3DRenderContext * render_ctx) {
-
-    // required sizes calculations
-    int nrow = 50;
-    int ncol = 50;
-    int nvtx = nrow * ncol;
-    int nidx = (nrow - 1) * (ncol - 1) * 6;     // every 6 vertices form a quad
-
-    Vertex * vertices = (Vertex *)::malloc(sizeof(Vertex) * nvtx);
-    uint16_t * indices = (uint16_t *)::malloc(sizeof(uint16_t) * nidx);
-    GeomVertex * grid = (GeomVertex *)::malloc(sizeof(GeomVertex) * nvtx);
-
-    create_grid16(320.0f, 320.0f, 50, 50, grid, indices);
-
-    // Extract the vertex elements we are interested and apply the height function to
-    // each vertex.  In addition, color the vertices based on their height so we have
-    // sandy looking beaches, grassy low hills, and snow mountain peaks.
-
-    for (int i = 0; i < nvtx; ++i) {
-        auto & p = grid[i].Position;
-        vertices[i].position = p;
-        vertices[i].position.y = calc_hill_height(p.x, p.z);
-        vertices[i].normal = calc_hill_normal(p.x, p.z);
-        vertices[i].texc = grid[i].TexC;
-    }
-
-    UINT vb_byte_size = nvtx * sizeof(Vertex);
-    UINT ib_byte_size = nidx * sizeof(uint16_t);
-
-    // -- Fill out render_ctx geom (output)
-
-    CHECK_AND_FAIL(D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_cpu));
-    if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_GRID].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
-
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_cpu);
-    if (indices)
-        CopyMemory(render_ctx->geom[GEOM_GRID].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
-
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_GRID].vb_gpu, &render_ctx->geom[GEOM_GRID].vb_uploader);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_GRID].ib_gpu, &render_ctx->geom[GEOM_GRID].ib_uploader);
-
-    render_ctx->geom[GEOM_GRID].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_GRID].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_GRID].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_GRID].index_format = DXGI_FORMAT_R16_UINT;
-
-    SubmeshGeometry submesh;
-    submesh.index_count = nidx;
-    submesh.start_index_location = 0;
-    submesh.base_vertex_location = 0;
-
-    render_ctx->geom[GEOM_GRID].submesh_names[0] = "grid";
-    render_ctx->geom[GEOM_GRID].submesh_geoms[0] = submesh;
-
-    ::free(grid);
-    ::free(indices);
-    ::free(vertices);
-}
-static void
-create_water_geometry (UINT nrow, UINT ncol, UINT ntri, D3DRenderContext * render_ctx) {
-    _Unreferenced_parameter_(ntri);
-    uint32_t _WAVE_VTX_CNT = ncol * nrow;
-    uint32_t _idx_cnt = (nrow - 1) * (ncol - 1) * 6;    // every 6 vertices form a quad
-    Vertex * vertices = (Vertex *)::calloc(_WAVE_VTX_CNT, sizeof(Vertex));
-    uint32_t * indices = (uint32_t *)::calloc(_idx_cnt, sizeof(uint32_t));
-
-    GeomVertex * grid = (GeomVertex *)::calloc(_WAVE_VTX_CNT, sizeof(GeomVertex));
-
-    create_grid32(256.0f, 256.0f, nrow, ncol, grid, indices);
-
-    for (uint32_t i = 0; i < _WAVE_VTX_CNT; i++) {
-        vertices[i].position = grid[i].Position;
-        vertices[i].normal = grid[i].Normal;
-        vertices[i].texc = grid[i].TexC;
-    }
-
-    UINT vb_byte_size = _WAVE_VTX_CNT * sizeof(Vertex);
-    UINT ib_byte_size = _idx_cnt * sizeof(uint32_t);
-
-    // -- Fill out render_ctx geom (output)
-
-    CHECK_AND_FAIL(D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_cpu));
-    if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_WATER].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
-    CHECK_AND_FAIL(D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_cpu));
-    if (indices)
-        CopyMemory(render_ctx->geom[GEOM_WATER].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
-
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_WATER].vb_gpu, &render_ctx->geom[GEOM_WATER].vb_uploader);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_WATER].ib_gpu, &render_ctx->geom[GEOM_WATER].ib_uploader);
-
-    render_ctx->geom[GEOM_WATER].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_WATER].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_WATER].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_WATER].index_format = DXGI_FORMAT_R32_UINT;
-
-    SubmeshGeometry submesh;
-    submesh.index_count = _idx_cnt;
-    submesh.start_index_location = 0;
-    submesh.base_vertex_location = 0;
-
-    render_ctx->geom[GEOM_WATER].submesh_names[0] = "water";
-    render_ctx->geom[GEOM_WATER].submesh_geoms[0] = submesh;
-
-    ::free(grid);
-    ::free(indices);
-    ::free(vertices);
-}
-static void
-create_treesprites_geometry (D3DRenderContext * render_ctx) {
-    struct TreeSpriteVertex {
-        XMFLOAT3 pos;
-        XMFLOAT2 size;
-    };
-
-    constexpr int tree_count = 10;
-    TreeSpriteVertex vertices[tree_count];
-    vertices[0].pos = {-40.00f , 8.5f + calc_hill_height(-40.00f, 60.00f) ,  60.00f}; vertices[0].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[1].pos = {20.00f  , 7.5f + calc_hill_height(20.00f, 58.10f)  ,  58.10f}; vertices[1].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[2].pos = {-50.00f , 8.5f + calc_hill_height(-50.00f, 30.00f) ,  30.00f}; vertices[2].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[3].pos = {-100.00f, 8.5f + calc_hill_height(-100.00, 30.00f) ,  30.00f}; vertices[3].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[4].pos = {35.00f  , 9.0f + calc_hill_height(35.00f, 0.00f)   ,   0.00f}; vertices[4].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[5].pos = {85.00f  , 9.0f + calc_hill_height(85.00f, 65.00f)  ,  65.00f}; vertices[5].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[6].pos = {-86.00f , 7.0f + calc_hill_height(-86.00f, -30.00f), -30.00f}; vertices[6].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[7].pos = {-15.00f , 9.0f + calc_hill_height(-15.00f, -30.00f), -30.00f}; vertices[7].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[8].pos = {14.00f  , 9.0f + calc_hill_height(14.00f, 38.00f)  ,  38.00f}; vertices[8].size = XMFLOAT2(20.0f, 20.0f);
-    vertices[9].pos = {49.00f  , 8.0f + calc_hill_height(49.00f, -65.00f) , -65.00f}; vertices[9].size = XMFLOAT2(20.0f, 20.0f);
-
-    /* Random Tree Positioning
-    srand((unsigned int)time(NULL));
-    for (UINT i = 0; i < tree_count; i++) {
-        float x = rand_float(-105.0f, 105.0f);
-        float z = 0;
-        int rn = rand_int(0, 1);
-        if (rn == 0)
-            z = rand_float(30.0f, 60.0f);
-        else
-            z = rand_float(-30.0f, -60.0f);
-        float y = calc_hill_height(x, z);
-
-        // a bit of offset
-        y += 9.0f;
-
-        vertices[i].pos = XMFLOAT3(x, y, z);
-        vertices[i].size = XMFLOAT2(20.0f, 20.0f);
-    }
-    */
-
-    uint16_t indices[tree_count] = {
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-        9/*, 10, 11, 12, 13, 14, 15*/
-    };
-
-    UINT vb_byte_size = tree_count * sizeof(TreeSpriteVertex);
-    UINT ib_byte_size = tree_count * sizeof(uint16_t);
-
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_cpu);
-    if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_TREESPRITE].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
-
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_cpu);
-    if (indices)
-        CopyMemory(render_ctx->geom[GEOM_TREESPRITE].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
-
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_TREESPRITE].vb_gpu, &render_ctx->geom[GEOM_TREESPRITE].vb_uploader);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_TREESPRITE].ib_gpu, &render_ctx->geom[GEOM_TREESPRITE].ib_uploader);
-
-    render_ctx->geom[GEOM_TREESPRITE].vb_byte_stide = sizeof(TreeSpriteVertex);
-    render_ctx->geom[GEOM_TREESPRITE].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_TREESPRITE].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_TREESPRITE].index_format = DXGI_FORMAT_R16_UINT;
-
-    SubmeshGeometry submesh;
-    submesh.index_count = tree_count;
-    submesh.start_index_location = 0;
-    submesh.base_vertex_location = 0;
-
-    render_ctx->geom[GEOM_TREESPRITE].submesh_names[0] = "points";
-    render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0] = submesh;
-}
-static void
-create_render_items (D3DRenderContext * render_ctx, GpuWaves * wave) {
-    render_ctx->all_ritems.ritems[RITEM_WATER].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_WATER].tex_transform = Identity4x4();
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_WATER].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_WATER].obj_cbuffer_index = 0;
-    render_ctx->all_ritems.ritems[RITEM_WATER].mat = &render_ctx->materials[MAT_WATER];
-    render_ctx->all_ritems.ritems[RITEM_WATER].geometry = &render_ctx->geom[GEOM_WATER];
-    render_ctx->all_ritems.ritems[RITEM_WATER].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_WATER].index_count = render_ctx->geom[GEOM_WATER].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_WATER].start_index_loc = render_ctx->geom[GEOM_WATER].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_WATER].base_vertex_loc = render_ctx->geom[GEOM_WATER].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_WATER].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_WATER].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_WATER].grid_spatial_step = wave->spatial_step;
-    render_ctx->all_ritems.ritems[RITEM_WATER].displacement_map_texel_size.x = 1.0f / wave->ncol;
-    render_ctx->all_ritems.ritems[RITEM_WATER].displacement_map_texel_size.y = 1.0f / wave->nrow;
-    render_ctx->all_ritems.ritems[RITEM_WATER].initialized = true;
-    render_ctx->all_ritems.size++;
-    render_ctx->transparent_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_WATER];
-    render_ctx->transparent_ritems.size++;
-    render_ctx->gpu_waves_rtimes.ritems[0] = render_ctx->all_ritems.ritems[RITEM_WATER];
-    render_ctx->gpu_waves_rtimes.size++;
-
-    render_ctx->all_ritems.ritems[RITEM_GRID].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform = Identity4x4();
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_GRID].tex_transform, XMMatrixScaling(5.0f, 5.0f, 1.0f));
-    render_ctx->all_ritems.ritems[RITEM_GRID].obj_cbuffer_index = 1;
-    render_ctx->all_ritems.ritems[RITEM_GRID].mat = &render_ctx->materials[MAT_GRASS];
-    render_ctx->all_ritems.ritems[RITEM_GRID].geometry = &render_ctx->geom[GEOM_GRID];
-    render_ctx->all_ritems.ritems[RITEM_GRID].primitive_type = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_GRID].index_count = render_ctx->geom[GEOM_GRID].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_GRID].start_index_loc = render_ctx->geom[GEOM_GRID].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_GRID].base_vertex_loc = render_ctx->geom[GEOM_GRID].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_GRID].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_GRID].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_GRID].grid_spatial_step = 1;
-    render_ctx->all_ritems.ritems[RITEM_GRID].displacement_map_texel_size = {1.0f, 1.0f};
-    render_ctx->all_ritems.ritems[RITEM_GRID].initialized = true;
-    render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_GRID];
-    render_ctx->opaque_ritems.size++;
-
+create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_BOX].world = Identity4x4();
-    XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
+    DirectX::XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
     render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 2;
+    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 0;
     render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_BOX];
     render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WOOD_CRATE];
     render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -663,26 +346,8 @@ create_render_items (D3DRenderContext * render_ctx, GpuWaves * wave) {
     render_ctx->all_ritems.ritems[RITEM_BOX].displacement_map_texel_size = {1.0f, 1.0f};
     render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
     render_ctx->all_ritems.size++;
-    render_ctx->alphatested_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_BOX];
-    render_ctx->alphatested_ritems.size++;
-
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].obj_cbuffer_index = 3;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].geometry = &render_ctx->geom[GEOM_TREESPRITE];
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].mat = &render_ctx->materials[MAT_TREE_SPRITE];
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].primitive_type = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].index_count = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].start_index_loc = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].base_vertex_loc = render_ctx->geom[GEOM_TREESPRITE].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].grid_spatial_step = 1;
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].displacement_map_texel_size = {1.0f, 1.0f};
-    render_ctx->all_ritems.ritems[RITEM_TREESPRITE].initialized = true;
-    render_ctx->all_ritems.size++;
-    render_ctx->alphatested_treesprites_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_TREESPRITE];
-    render_ctx->alphatested_treesprites_ritems.size++;
+    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_BOX];
+    render_ctx->opaque_ritems.size++;
 }
 // -- indexed drawing
 static void
@@ -722,20 +387,11 @@ draw_render_items (
     }
 }
 static void
-create_descriptor_heaps (
-    D3DRenderContext * render_ctx,
-    GpuWaves * wave,
-    BlurFilter * blur, SobelFilter * sobel,
-    OffscreenRenderTarget * ort
-) {
+create_descriptor_heaps (D3DRenderContext * render_ctx) {
 
     // Create Shader Resource View descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
     srv_heap_desc.NumDescriptors = _COUNT_TEX +
-        6 +     /* GpuWaves descriptors */
-        4 +     /* Blur descriptors     */
-        2 +     /* Sobel descriptors    */
-        1 +     /* Offscreen RenderTarget descriptor */
         1;      /* imgui descriptor     */
     srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
@@ -743,29 +399,7 @@ create_descriptor_heaps (
 
     // Fill out the heap with actual descriptors
     D3D12_CPU_DESCRIPTOR_HANDLE descriptor_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-
-    // grass texture
-    ID3D12Resource * grass_tex = render_ctx->textures[TEX_GRASS].resource;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = grass_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = grass_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    render_ctx->device->CreateShaderResourceView(grass_tex, &srv_desc, descriptor_cpu_handle);
-
-    // water texture
-    ID3D12Resource * water_tex = render_ctx->textures[TEX_WATER].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc));         // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = water_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = water_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptr
-    render_ctx->device->CreateShaderResourceView(water_tex, &srv_desc, descriptor_cpu_handle);
 
     // crate texture
     ID3D12Resource * box_tex = render_ctx->textures[TEX_CRATE01].resource;
@@ -776,67 +410,8 @@ create_descriptor_heaps (
     srv_desc.Texture2D.MostDetailedMip = 0;
     srv_desc.Texture2D.MipLevels = box_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
+    //descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
     render_ctx->device->CreateShaderResourceView(box_tex, &srv_desc, descriptor_cpu_handle);
-
-    // wire_fence texture
-    ID3D12Resource * wire_tex = render_ctx->textures[TEX_WIREFENCE].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = wire_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = wire_tex->GetDesc().MipLevels;
-    srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(wire_tex, &srv_desc, descriptor_cpu_handle);
-
-    // tree_array texture
-    ID3D12Resource * tree_tex = render_ctx->textures[TEX_TREEARRAY].resource;
-    memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = tree_tex->GetDesc().Format;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-    srv_desc.Texture2DArray.MostDetailedMip = 0;
-    srv_desc.Texture2DArray.MipLevels = tree_tex->GetDesc().MipLevels;
-    srv_desc.Texture2DArray.FirstArraySlice = 0;
-    srv_desc.Texture2DArray.ArraySize = tree_tex->GetDesc().DepthOrArraySize;
-    descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(tree_tex, &srv_desc, descriptor_cpu_handle);
-
-    //
-    // Create GpuWaves descriptors
-    //
-    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_waves = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_waves.ptr +=
-        (_COUNT_TEX)*render_ctx->cbv_srv_uav_descriptor_size;
-    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_waves = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_waves.ptr +=
-        (_COUNT_TEX)*render_ctx->cbv_srv_uav_descriptor_size;
-    GpuWaves_BuildDescriptors(wave, hcpu_waves, hgpu_waves, render_ctx->cbv_srv_uav_descriptor_size);
-
-    //
-    // Create Blur descriptors
-    //
-    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_blur = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_blur.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_blur = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_blur.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    BlurFilter_CreateDescriptors(blur, hcpu_blur, hgpu_blur, render_ctx->cbv_srv_uav_descriptor_size);
-
-
-    //
-    // Create Sobel Descriptors
-    //
-    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_sobel = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_sobel.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_sobel = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_sobel.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    SobelFilter_CreateDescriptors(sobel, hcpu_sobel, hgpu_sobel, render_ctx->cbv_srv_uav_descriptor_size);
 
 
     // Create Render Target View Descriptor Heap
@@ -845,20 +420,6 @@ create_descriptor_heaps (
     rtv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS::D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     render_ctx->device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&render_ctx->rtv_heap));
-
-    //
-    // Create Offscreen RenderTarget descriptors
-    //
-    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_offscreen_rt = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_offscreen_rt.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    D3D12_GPU_DESCRIPTOR_HANDLE hgpu_offscreen_rt = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
-    hgpu_offscreen_rt.ptr +=
-        (_COUNT_TEX + 6 /* GpuWaves descriptors */ + 4 /* Blur descriptors */ + 2 /* Sobel descriptors */) * render_ctx->cbv_srv_uav_descriptor_size;
-    D3D12_CPU_DESCRIPTOR_HANDLE hcpu_rtv = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
-    hcpu_rtv.ptr +=
-        (NUM_BACKBUFFERS)*render_ctx->rtv_descriptor_size;
-    OffscreenRenderTarget_CreateDescriptors(ort, hcpu_offscreen_rt, hgpu_offscreen_rt, hcpu_rtv);
 
     // Create Depth Stencil View Descriptor Heap
     D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc;
@@ -1365,122 +926,7 @@ create_pso (D3DRenderContext * render_ctx) {
     opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
     render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
-    //
-    // -- Create PSO for Transparent objs
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent_pso_desc = opaque_pso_desc;
 
-    D3D12_RENDER_TARGET_BLEND_DESC transparency_blend_desc = {};
-    transparency_blend_desc.BlendEnable = true;
-    transparency_blend_desc.LogicOpEnable = false;
-    transparency_blend_desc.SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    transparency_blend_desc.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-    transparency_blend_desc.BlendOp = D3D12_BLEND_OP_ADD;
-    transparency_blend_desc.SrcBlendAlpha = D3D12_BLEND_ONE;
-    transparency_blend_desc.DestBlendAlpha = D3D12_BLEND_ZERO;
-    transparency_blend_desc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    transparency_blend_desc.LogicOp = D3D12_LOGIC_OP_NOOP;
-    transparency_blend_desc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
-    transparent_pso_desc.BlendState.RenderTarget[0] = transparency_blend_desc;
-    render_ctx->device->CreateGraphicsPipelineState(&transparent_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_TRANSPARENT]));
-    //
-    // -- Create PSO for AlphaTested objs
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC alpha_pso_desc = opaque_pso_desc;
-    alpha_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferPointer();
-    alpha_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_ALPHATEST_PS]->GetBufferSize();
-    alpha_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    render_ctx->device->CreateGraphicsPipelineState(&alpha_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED]));
-
-    //
-    // -- Create PSO for Tree sprites
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC tree_pso_desc = opaque_pso_desc;
-    tree_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_VS]->GetBufferPointer();
-    tree_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_TREE_VS]->GetBufferSize();
-    tree_pso_desc.GS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_GS]->GetBufferPointer();
-    tree_pso_desc.GS.BytecodeLength = render_ctx->shaders[SHADER_TREE_GS]->GetBufferSize();
-    tree_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_TREE_PS]->GetBufferPointer();
-    tree_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_TREE_PS]->GetBufferSize();
-    tree_pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    tree_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
-    tree_pso_desc.InputLayout.pInputElementDescs = treesprite_input_desc;
-    tree_pso_desc.InputLayout.NumElements = ARRAY_COUNT(treesprite_input_desc);
-    render_ctx->device->CreateGraphicsPipelineState(&tree_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]));
-
-    //
-    // -- Create PSO for drawing waves
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC waves_render_pso = transparent_pso_desc;
-    waves_render_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_WAVE_VS]->GetBufferPointer();
-    waves_render_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_WAVE_VS]->GetBufferSize();
-    render_ctx->device->CreateGraphicsPipelineState(&waves_render_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_RENDER]));
-    //
-    // -- Create PSO for disturbing waves
-    //
-    D3D12_COMPUTE_PIPELINE_STATE_DESC waves_disturb_pso = {};
-    waves_disturb_pso.pRootSignature = render_ctx->root_signature_waves;
-    waves_disturb_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_DISTURB_WAVE_CS]->GetBufferPointer();
-    waves_disturb_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_DISTURB_WAVE_CS]->GetBufferSize();
-    waves_disturb_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-    render_ctx->device->CreateComputePipelineState(&waves_disturb_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_DISTURB]));
-    //
-    // -- Create PSO for updating waves
-    //
-    D3D12_COMPUTE_PIPELINE_STATE_DESC waves_update_pso = {};
-    waves_update_pso.pRootSignature = render_ctx->root_signature_waves;
-    waves_update_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_UPDATE_WAVE_CS]->GetBufferPointer();
-    waves_update_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_UPDATE_WAVE_CS]->GetBufferSize();
-    waves_update_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-    render_ctx->device->CreateComputePipelineState(&waves_update_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_GPU_WAVES_UPDATE]));
-    //
-    // -- Create PSO for horizontal blur
-    //
-    D3D12_COMPUTE_PIPELINE_STATE_DESC hor_blur_pso = {};
-    hor_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
-    hor_blur_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_HOR_BLUR_CS]->GetBufferPointer();
-    hor_blur_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_HOR_BLUR_CS]->GetBufferSize();
-    hor_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-    render_ctx->device->CreateComputePipelineState(&hor_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_HOR_BLUR]));
-    //
-    // -- Create PSO for vertical blur
-    //
-    D3D12_COMPUTE_PIPELINE_STATE_DESC ver_blur_pso = {};
-    ver_blur_pso.pRootSignature = render_ctx->root_signature_postprocessing_blur;
-    ver_blur_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_VER_BLUR_CS]->GetBufferPointer();
-    ver_blur_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_VER_BLUR_CS]->GetBufferSize();
-    ver_blur_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-    render_ctx->device->CreateComputePipelineState(&ver_blur_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_VER_BLUR]));
-
-    //
-    // -- Create PSO for compositing post process
-    //
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC composite_pso = opaque_pso_desc;
-    composite_pso.pRootSignature = render_ctx->root_signature_postprocessing_sobel;
-
-    // disable depth test
-    composite_pso.DepthStencilState.DepthEnable = false;
-    composite_pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    composite_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-
-    composite_pso.VS.pShaderBytecode = render_ctx->shaders[SHADER_COMPOSITE_VS]->GetBufferPointer();
-    composite_pso.VS.BytecodeLength = render_ctx->shaders[SHADER_COMPOSITE_VS]->GetBufferSize();
-
-    composite_pso.PS.pShaderBytecode = render_ctx->shaders[SHADER_COMPOSITE_PS]->GetBufferPointer();
-    composite_pso.PS.BytecodeLength = render_ctx->shaders[SHADER_COMPOSITE_PS]->GetBufferSize();
-
-    render_ctx->device->CreateGraphicsPipelineState(&composite_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_COMPISITE]));
-
-    //
-    // -- Create PSO for sobel filter
-    //
-    D3D12_COMPUTE_PIPELINE_STATE_DESC sobel_pso = {};
-    sobel_pso.pRootSignature = render_ctx->root_signature_postprocessing_sobel;
-    sobel_pso.CS.pShaderBytecode = render_ctx->shaders[SHADER_SOBEL_CS]->GetBufferPointer();
-    sobel_pso.CS.BytecodeLength = render_ctx->shaders[SHADER_SOBEL_CS]->GetBufferSize();
-    sobel_pso.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-    render_ctx->device->CreateComputePipelineState(&sobel_pso, IID_PPV_ARGS(&render_ctx->psos[LAYER_SOBEL]));
 }
 static void
 handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
@@ -1528,7 +974,7 @@ update_camera (SceneContext * sc) {
     XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
     XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
-    XMStoreFloat4x4(&sc->view, view);
+    DirectX::XMStoreFloat4x4(&sc->view, view);
 }
 static void
 update_obj_cbuffers (D3DRenderContext * render_ctx) {
@@ -1542,12 +988,12 @@ update_obj_cbuffers (D3DRenderContext * render_ctx) {
             render_ctx->all_ritems.ritems[i].initialized
             ) {
             UINT obj_index = render_ctx->all_ritems.ritems[i].obj_cbuffer_index;
-            XMMATRIX world = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].world);
-            XMMATRIX tex_transform = XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].tex_transform);
+            XMMATRIX world = DirectX::XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].world);
+            XMMATRIX tex_transform = DirectX::XMLoadFloat4x4(&render_ctx->all_ritems.ritems[i].tex_transform);
 
             ObjectConstants obj_cbuffer = {};
-            XMStoreFloat4x4(&obj_cbuffer.world, XMMatrixTranspose(world));
-            XMStoreFloat4x4(&obj_cbuffer.tex_transform, XMMatrixTranspose(tex_transform));
+            DirectX::XMStoreFloat4x4(&obj_cbuffer.world, XMMatrixTranspose(world));
+            DirectX::XMStoreFloat4x4(&obj_cbuffer.tex_transform, XMMatrixTranspose(tex_transform));
             obj_cbuffer.displacement_texel_size = render_ctx->all_ritems.ritems[i].displacement_map_texel_size;
             obj_cbuffer.grid_spatial_step = render_ctx->all_ritems.ritems[i].grid_spatial_step;
 
@@ -1568,13 +1014,13 @@ update_mat_cbuffers (D3DRenderContext * render_ctx) {
         // data changes, it needs to be updated for each FrameResource.
         Material * mat = &render_ctx->materials[i];
         if (mat->n_frames_dirty > 0) {
-            XMMATRIX mat_transform = XMLoadFloat4x4(&mat->mat_transform);
+            XMMATRIX mat_transform = DirectX::XMLoadFloat4x4(&mat->mat_transform);
 
             MaterialConstants mat_constants;
             mat_constants.diffuse_albedo = render_ctx->materials[i].diffuse_albedo;
             mat_constants.fresnel_r0 = render_ctx->materials[i].fresnel_r0;
             mat_constants.roughness = render_ctx->materials[i].roughness;
-            XMStoreFloat4x4(&mat_constants.mat_transform, XMMatrixTranspose(mat_transform));
+            DirectX::XMStoreFloat4x4(&mat_constants.mat_transform, XMMatrixTranspose(mat_transform));
 
             uint8_t * mat_ptr = render_ctx->frame_resources[frame_index].mat_cb_data_ptr + ((UINT64)mat->mat_cbuffer_index * cbuffer_size);
             memcpy(mat_ptr, &mat_constants, cbuffer_size);
@@ -1587,8 +1033,8 @@ update_mat_cbuffers (D3DRenderContext * render_ctx) {
 static void
 update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 
-    XMMATRIX view = XMLoadFloat4x4(&global_scene_ctx.view);
-    XMMATRIX proj = XMLoadFloat4x4(&global_scene_ctx.proj);
+    XMMATRIX view = DirectX::XMLoadFloat4x4(&global_scene_ctx.view);
+    XMMATRIX proj = DirectX::XMLoadFloat4x4(&global_scene_ctx.proj);
 
     XMMATRIX view_proj = XMMatrixMultiply(view, proj);
     XMVECTOR det_view = XMMatrixDeterminant(view);
@@ -1598,12 +1044,12 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
     XMVECTOR det_view_proj = XMMatrixDeterminant(view_proj);
     XMMATRIX inv_view_proj = XMMatrixInverse(&det_view_proj, view_proj);
 
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.view, XMMatrixTranspose(view));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view, XMMatrixTranspose(inv_view));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.proj, XMMatrixTranspose(proj));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_proj, XMMatrixTranspose(inv_proj));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
-    XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view_proj, XMMatrixTranspose(inv_view_proj));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.view, XMMatrixTranspose(view));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view, XMMatrixTranspose(inv_view));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.proj, XMMatrixTranspose(proj));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_proj, XMMatrixTranspose(inv_proj));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.view_proj, XMMatrixTranspose(view_proj));
+    DirectX::XMStoreFloat4x4(&render_ctx->main_pass_constants.inverse_view_proj, XMMatrixTranspose(inv_view_proj));
     render_ctx->main_pass_constants.eye_posw = global_scene_ctx.eye_pos;
 
     render_ctx->main_pass_constants.render_target_size = XMFLOAT2((float)global_scene_ctx.width, (float)global_scene_ctx.height);
@@ -1623,54 +1069,6 @@ update_pass_cbuffers (D3DRenderContext * render_ctx, GameTimer * timer) {
 
     uint8_t * pass_ptr = render_ctx->frame_resources[render_ctx->frame_index].pass_cb_data_ptr;
     memcpy(pass_ptr, &render_ctx->main_pass_constants, sizeof(PassConstants));
-}
-static void
-animate_material (Material * mat, GameTimer * timer) {
-    // Scroll the water material texture coordinates.
-    float& tu = mat->mat_transform(3, 0);
-    float& tv = mat->mat_transform(3, 1);
-
-    tu += 0.1f * timer->delta_time;
-    tv += 0.02f * timer->delta_time;
-
-    if (tu >= 1.0f)
-        tu -= 1.0f;
-
-    if (tv >= 1.0f)
-        tv -= 1.0f;
-
-    mat->mat_transform(3, 0) = tu;
-    mat->mat_transform(3, 1) = tv;
-
-    // Material has changed, so need to update cbuffer.
-    mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-}
-static void
-update_waves_gpu (GpuWaves * waves, D3DRenderContext * render_ctx, GameTimer * timer) {
-    float total_time = Timer_GetTotalTime(timer);
-    float delta_time = timer->delta_time;
-
-    // Every quarter second, generate a random wave.
-    static float t_base = 0.0f;
-    if ((total_time - t_base) >= 0.25f) {
-        t_base += 0.25f;
-
-        int i = rand_int(4, waves->nrow - 5);
-        int j = rand_int(4, waves->ncol - 5);
-
-        float r = rand_float(1.0f, 2.0f);
-
-        GpuWaves_Disturb(
-            waves, render_ctx->direct_cmd_list, render_ctx->root_signature_waves,
-            render_ctx->psos[LAYER_GPU_WAVES_DISTURB], i, j, r
-        );
-    }
-
-    // Update the wave simulation.
-    GpuWaves_Update(
-        waves, render_ctx->direct_cmd_list, render_ctx->root_signature_waves,
-        render_ctx->psos[LAYER_GPU_WAVES_UPDATE], delta_time
-    );
 }
 static HRESULT
 move_to_next_frame (D3DRenderContext * render_ctx, UINT * out_frame_index, UINT * out_backbuffer_index) {
@@ -1737,7 +1135,7 @@ draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist, RenderItem * dummy_ri
     cmdlist->DrawInstanced(6, 1, 0, 0);
 }
 static HRESULT
-draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_filter, UINT blur_count) {
+draw_main (D3DRenderContext * render_ctx) {
     HRESULT ret = E_FAIL;
     UINT frame_index = render_ctx->frame_index;
     UINT backbuffer_index = render_ctx->backbuffer_index;
@@ -1756,8 +1154,6 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
-
-    update_waves_gpu(waves, render_ctx, &global_timer);
 
     cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
 
@@ -1787,7 +1183,6 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
     // Bind per-pass constant buffer.  We only need to do this once per-pass.
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
-    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv); // set displacement map
 
     // 1. draw opaque objs first (opaque pso is currently used)
     draw_render_items(
@@ -1798,71 +1193,11 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
         render_ctx->srv_heap,
         &render_ctx->opaque_ritems, frame_index
     );
-    // 2. draw alpha-tested box/crate
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->alphatested_ritems, frame_index
-    );
-    // 3. draw tree-sprites
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->alphatested_treesprites_ritems, frame_index
-    );
-    // 4. draw gpu waves
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->gpu_waves_rtimes, frame_index
-    );
+    if (global_imgui_enabled)
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
-    if (blur_count > 0) {
-        //
-        // Blur compute work
-        //
-        BlurFilter_Execute(
-            blur_filter, cmdlist,
-            render_ctx->root_signature_postprocessing_blur,
-            render_ctx->psos[LAYER_HOR_BLUR],
-            render_ctx->psos[LAYER_VER_BLUR],
-            backbuffer,
-            blur_count
-        );
-        // -- prepare to copy blurred output to the backbuffer
-        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-
-        cmdlist->CopyResource(
-            backbuffer,
-            blur_filter->blur_map0
-        );
-
-        if (global_imgui_enabled) {
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        } else {
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-        }
-    } else if (blur_count == 0) {
-        if (global_imgui_enabled)
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-
-        // -- indicate that the backbuffer will now be used to present
-        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    }
+    // -- indicate that the backbuffer will now be used to present
+    resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     // -- finish populating command list
     cmdlist->Close();
@@ -1874,172 +1209,6 @@ draw_main (D3DRenderContext * render_ctx, GpuWaves * waves, BlurFilter * blur_fi
 
     return ret;
 }
-static HRESULT
-draw_stylized (
-    D3DRenderContext * render_ctx,
-    GpuWaves * waves,
-    OffscreenRenderTarget * ort,
-    BlurFilter * blur_filter, UINT blur_count,
-    SobelFilter * sobel_filter
-) {
-    HRESULT ret = E_FAIL;
-    UINT frame_index = render_ctx->frame_index;
-    UINT backbuffer_index = render_ctx->backbuffer_index;
-    ID3D12Resource * backbuffer = render_ctx->render_targets[backbuffer_index];
-    ID3D12GraphicsCommandList * cmdlist = render_ctx->direct_cmd_list;
-
-    // Populate command list
-
-    // -- reset cmd_allocator and cmd_list
-    render_ctx->frame_resources[frame_index].cmd_list_alloc->Reset();
-
-    ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
-
-    ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
-    cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
-
-    update_waves_gpu(waves, render_ctx, &global_timer);
-
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
-
-    // -- set viewport and scissor
-    cmdlist->RSSetViewports(1, &render_ctx->viewport);
-    cmdlist->RSSetScissorRects(1, &render_ctx->scissor_rect);
-
-    // -- change offscreen texture to be used as a render-target output
-    resource_usage_transition(
-        cmdlist,
-        ort->texture,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        D3D12_RESOURCE_STATE_RENDER_TARGET
-    );
-
-    // -- get CPU descriptor handle that represents the start of the rtv heap
-    D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = render_ctx->dsv_heap->GetCPUDescriptorHandleForHeapStart();
-
-    cmdlist->ClearRenderTargetView(ort->hcpu_rtv, (float *)&render_ctx->main_pass_constants.fog_color, 0, nullptr);
-    cmdlist->ClearDepthStencilView(dsv_handle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-
-    // -- specify the buffers we are going to render to
-    cmdlist->OMSetRenderTargets(1, &ort->hcpu_rtv, true, &dsv_handle);
-
-    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature);
-
-    // Bind per-pass constant buffer.  We only need to do this once per-pass.
-    ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
-    cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
-    cmdlist->SetGraphicsRootDescriptorTable(4, waves->curr_sol_hgpu_srv); // set displacement map
-
-    // 1. draw opaque objs first (opaque pso is currently used)
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->opaque_ritems, frame_index
-    );
-    // 2. draw alpha-tested box/crate
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->alphatested_ritems, frame_index
-    );
-    // 3. draw tree-sprites
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_ALPHATESTED_TREESPRITES]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->alphatested_treesprites_ritems, frame_index
-    );
-    // 4. draw gpu waves
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_GPU_WAVES_RENDER]);
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->gpu_waves_rtimes, frame_index
-    );
-
-    //
-    // Sobel compute work
-    //
-
-    // -- change the offscreen rendertarget to be used as input
-    resource_usage_transition(cmdlist, ort->texture, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
-
-    SobelFilter_Execute(sobel_filter, cmdlist, render_ctx->root_signature_postprocessing_sobel, render_ctx->psos[LAYER_SOBEL], ort->hgpu_srv);
-
-    //
-    // Switching back to backbuffer rendering
-    //
-    resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = render_ctx->rtv_heap->GetCPUDescriptorHandleForHeapStart();
-    rtv_handle.ptr = SIZE_T(INT64(rtv_handle.ptr) + INT64(render_ctx->backbuffer_index) * INT64(render_ctx->rtv_descriptor_size));    // -- apply offset
-    cmdlist->OMSetRenderTargets(1, &rtv_handle, true, &dsv_handle);
-
-    cmdlist->SetGraphicsRootSignature(render_ctx->root_signature_postprocessing_sobel);
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_COMPISITE]);
-    cmdlist->SetGraphicsRootDescriptorTable(0, ort->hgpu_srv);
-    cmdlist->SetGraphicsRootDescriptorTable(1, sobel_filter->hgpu_srv);
-    draw_fullscreen_quad(cmdlist, &render_ctx->opaque_ritems.ritems[0]);
-
-    if (blur_count > 0) {
-        //
-        // Blur compute work
-        //
-        BlurFilter_Execute(
-            blur_filter, cmdlist,
-            render_ctx->root_signature_postprocessing_blur,
-            render_ctx->psos[LAYER_HOR_BLUR],
-            render_ctx->psos[LAYER_VER_BLUR],
-            backbuffer,
-            blur_count
-        );
-        // -- prepare to copy blurred output to the backbuffer
-        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-
-        cmdlist->CopyResource(
-            backbuffer,
-            blur_filter->blur_map0
-        );
-
-        if (global_imgui_enabled) {
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        } else {
-            resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-        }
-    } else if (blur_count == 0) {
-        if (global_imgui_enabled)
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
-
-        // -- indicate that the backbuffer will now be used to present
-        resource_usage_transition(cmdlist, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    }
-
-    // -- finish populating command list
-    cmdlist->Close();
-
-    ID3D12CommandList * cmd_lists [] = {cmdlist};
-    render_ctx->cmd_queue->ExecuteCommandLists(ARRAY_COUNT(cmd_lists), cmd_lists);
-
-    render_ctx->swapchain->Present(1 /*sync interval*/, 0 /*present flag*/);
-
-    return ret;
-}
-
 static void
 SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
     _ASSERT_EXPR(scene_ctx, "scene_ctx not valid");
@@ -2110,7 +1279,7 @@ RenderContext_Init (D3DRenderContext * render_ctx) {
     _ASSERT_EXPR(false == render_ctx->msaa4x_state, _T("Don't enable 4x MSAA for now"));
 }
 static void
-d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobel, OffscreenRenderTarget * ort) {
+d3d_resize (D3DRenderContext * render_ctx) {
     int w = global_scene_ctx.width;
     int h = global_scene_ctx.height;
 
@@ -2215,19 +1384,6 @@ d3d_resize (D3DRenderContext * render_ctx, BlurFilter * blur, SobelFilter * sobe
         global_scene_ctx.aspect_ratio = static_cast<float>(w) / h;
         XMMATRIX p = DirectX::XMMatrixPerspectiveFovLH(0.25f * XM_PI, global_scene_ctx.aspect_ratio, 1.0f, 1000.0f);
         XMStoreFloat4x4(&global_scene_ctx.proj, p);
-
-        // blur filter resize
-        if (blur)
-            BlurFilter_Resize(blur, w, h);
-
-        // sobel filter resize
-        if (sobel)
-            SobelFilter_Resize(sobel, w, h);
-
-        // ort filter resize
-        if (ort) {
-            OffscreenRenderTarget_Resize(ort, w, h);
-        }
     }
 }
 static void
@@ -2294,13 +1450,13 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 global_paused = true;
             } else if (wParam == SIZE_MAXIMIZED) {
                 global_paused = false;
-                d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
+                d3d_resize(_render_ctx);
             } else if (wParam == SIZE_RESTORED) {
                 // TODO(omid): handle restore from minimize/maximize 
                 if (global_resizing) {
                     // don't do nothing until resizing finished
                 } else {
-                    d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
+                    d3d_resize(_render_ctx);
                 }
             }
         }
@@ -2317,7 +1473,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         global_paused = false;
         global_resizing  = false;
         Timer_Start(&global_timer);
-        d3d_resize(_render_ctx, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
+        d3d_resize(_render_ctx);
     } break;
     case WM_DESTROY: {
         PostQuitMessage(0);
@@ -2506,77 +1662,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->textures[TEX_CRATE01].filename,
         &render_ctx->textures[TEX_CRATE01]
     );
-    // water
-    strcpy_s(render_ctx->textures[TEX_WATER].name, "watertex");
-    wcscpy_s(render_ctx->textures[TEX_WATER].filename, L"../Textures/water1.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WATER].filename,
-        &render_ctx->textures[TEX_WATER]
-    );
-    // grass
-    strcpy_s(render_ctx->textures[TEX_GRASS].name, "grasstex");
-    wcscpy_s(render_ctx->textures[TEX_GRASS].filename, L"../Textures/grass.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_GRASS].filename,
-        &render_ctx->textures[TEX_GRASS]
-    );
-    // wire_fence
-    strcpy_s(render_ctx->textures[TEX_WIREFENCE].name, "wirefencetex");
-    wcscpy_s(render_ctx->textures[TEX_WIREFENCE].filename, L"../Textures/WireFence.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_WIREFENCE].filename,
-        &render_ctx->textures[TEX_WIREFENCE]
-    );
-    // tree_array
-    strcpy_s(render_ctx->textures[TEX_TREEARRAY].name, "treearraytex");
-    wcscpy_s(render_ctx->textures[TEX_TREEARRAY].filename, L"../Textures/treeArray2.dds");
-    load_texture(
-        render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_TREEARRAY].filename,
-        &render_ctx->textures[TEX_TREEARRAY]
-    );
 #pragma endregion
 
-    // Waves Initial Setup
-    uint32_t const nrow = 256;
-    uint32_t const ncols = 256;
-    uint32_t const N_VTX = nrow * ncols;
-    BYTE * wave_memory = (BYTE *)::malloc(sizeof(GpuWaves));
-    GpuWaves * waves = GpuWaves_Init(
-        wave_memory,
-        render_ctx->direct_cmd_list,
-        render_ctx->device,
-        nrow, ncols, 0.25f, 0.03f, 2.0f, 0.2f
-    );
-
-    // Blur Initial Setup
-    size_t blur_size = BlurFilter_CalculateRequiredSize();
-    BYTE * blur_memory = (BYTE *)::malloc(blur_size);
-    global_blur_filter = BlurFilter_Init(
-        blur_memory,
-        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
-        DXGI_FORMAT_R8G8B8A8_UNORM
-    );
-
-    // Offscreen RenderTarget setup
-    OffscreenRenderTarget_Init(
-        &global_offscreen_rendertarget,
-        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
-        render_ctx->backbuffer_format,
-        (float *)&render_ctx->main_pass_constants.fog_color
-    );
-
-    // Sobel initial setup
-    SobelFilter_Init(
-        &global_sobel_filter,
-        render_ctx->device, global_scene_ctx.width, global_scene_ctx.height,
-        render_ctx->backbuffer_format
-    );
-
-    create_descriptor_heaps(render_ctx, waves, global_blur_filter, &global_sobel_filter, &global_offscreen_rendertarget);
+    create_descriptor_heaps(render_ctx);
 
 #pragma region Dsv_Creation
 // Create the depth/stencil buffer and view.
@@ -2670,77 +1758,29 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // ========================================================================================================
 #pragma region Root_Signature_Creation
     create_root_signature(render_ctx->device, &render_ctx->root_signature);
-    create_root_signature_gpuwaves(render_ctx->device, &render_ctx->root_signature_waves);
-    create_root_signature_postprocessing_blur(render_ctx->device, &render_ctx->root_signature_postprocessing_blur);
-    create_root_signature_postprocessing_sobel(render_ctx->device, &render_ctx->root_signature_postprocessing_sobel);
 #pragma endregion Root_Signature_Creation
 
     // Load and compile shaders
 
 #pragma region Compile Shaders
     TCHAR shaders_path [] = _T("./shaders/default.hlsl");
-    TCHAR tree_shader_path []= _T("./shaders/tree_sprite.hlsl");
-    TCHAR wavesim_shader_path []= _T("./shaders/wave_sim.hlsl");
-    TCHAR blur_shader_path [] = _T("./shaders/blur.hlsl");
-    TCHAR sobel_shader_path []= _T("./shaders/sobel.hlsl");
-    TCHAR composite_shader_path [] = _T("./shaders/composite.hlsl");
 
     {   // standard shaders
         compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
-
-        int const n_define_wave = 1;
-        DxcDefine defines_wave[n_define_wave] = {};
-        defines_wave[0] = {.Name = _T("DISPLACEMENT_MAP"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), defines_wave, n_define_wave, &render_ctx->shaders[SHADER_WAVE_VS]);
 
         int const n_define_fog = 1;
         DxcDefine defines_fog[n_define_fog] = {};
         defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
         compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
-
-        int const n_define_alphatest = 2;
-        DxcDefine defines_alphatest[n_define_alphatest] = {};
-        defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_ALPHATEST_PS]);
-    }
-    {   // tree-sprite shaders
-        compile_shader(tree_shader_path, _T("VS_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_TREE_VS]);
-        compile_shader(tree_shader_path, _T("GS_Main"), _T("gs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_TREE_GS]);
-
-        int const n_define_alphatest = 2;
-        DxcDefine defines_alphatest[n_define_alphatest] = {};
-        defines_alphatest[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        defines_alphatest[1] = {.Name = _T("ALPHA_TEST"), .Value = _T("1")};
-        compile_shader(tree_shader_path, _T("PS_Main"), _T("ps_6_0"), defines_alphatest, n_define_alphatest, &render_ctx->shaders[SHADER_TREE_PS]);
-    }
-    {   // wave compute shaders
-        compile_shader(wavesim_shader_path, _T("update_wave_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_UPDATE_WAVE_CS]);
-        compile_shader(wavesim_shader_path, _T("disturb_wave_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DISTURB_WAVE_CS]);
-    }
-
-    {   // blur compute-shaders
-        compile_shader(blur_shader_path, _T("horizontal_blur_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_HOR_BLUR_CS]);
-        compile_shader(blur_shader_path, _T("vertical_blur_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_VER_BLUR_CS]);
-    }
-    {   // composite shaders (vertex shader and pixel shader)
-        compile_shader(composite_shader_path, _T("composite_vs"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_COMPOSITE_VS]);
-        compile_shader(composite_shader_path, _T("composite_ps"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_COMPOSITE_PS]);
-    }
-    {   // sobel compute-shader
-        compile_shader(sobel_shader_path, _T("sobel_cs"), _T("cs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_SOBEL_CS]);
     }
 #pragma endregion Compile Shaders
 
     create_pso(render_ctx);
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_land_geometry(render_ctx);
-    create_water_geometry(waves->nrow, waves->ncol, waves->ntri, render_ctx);
-    create_treesprites_geometry(render_ctx);
     create_shape_geometry(render_ctx);
     create_materials(render_ctx->materials);
-    create_render_items(render_ctx, waves);
+    create_render_items(render_ctx);
 
 #pragma endregion Shapes_And_Renderitem_Creation
 
@@ -2775,12 +1815,9 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma endregion
 
 #pragma region Imgui Setup
-    bool stylized_sobel = false;
     bool * ptr_open = nullptr;
     ImGuiWindowFlags window_flags = 0;
-    bool beginwnd, sliderf, coloredit, sliderint;
-    int i_box_mat = 0;
-    int blur_count = 0;
+    bool beginwnd, sliderf, coloredit;
     if (global_imgui_enabled) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -2791,20 +1828,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // calculate imgui cpu & gpu handles on location on srv_heap
         D3D12_CPU_DESCRIPTOR_HANDLE imgui_cpu_handle = render_ctx->srv_heap->GetCPUDescriptorHandleForHeapStart();
         imgui_cpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
-            _COUNT_TEX +
-            6 +     /* GpuWaves descriptors */
-            4 +     /* Blur descriptors     */
-            2 +     /* Sobel descriptors    */
-            1       /* Offscreen RenderTarget descriptor */
+            _COUNT_TEX
             ));
 
         D3D12_GPU_DESCRIPTOR_HANDLE imgui_gpu_handle = render_ctx->srv_heap->GetGPUDescriptorHandleForHeapStart();
         imgui_gpu_handle.ptr += (render_ctx->cbv_srv_uav_descriptor_size * (
-            _COUNT_TEX +
-            6 +     /* GpuWaves descriptors */
-            4 +     /* Blur descriptors     */
-            2 +     /* Sobel descriptors    */
-            1       /* Offscreen RenderTarget descriptor */
+            _COUNT_TEX
             ));
 
             // Setup Platform/Renderer backends
@@ -2861,18 +1890,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
                 coloredit = ImGui::IsItemActive();
 
-                ImGui::Combo("Box Material", &i_box_mat, "   Wood\0   Wire-fenced\0\0");
-
-                ImGui::SliderInt(
-                    "Blur Filters",
-                    &blur_count,
-                    0,
-                    10
-                );
-                sliderint = ImGui::IsItemActive();
-
-                ImGui::Checkbox("Draw Stylized (Sobel Filter)", &stylized_sobel);
-
                 ImGui::Text("\n\n");
                 ImGui::Separator();
                 ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
@@ -2880,13 +1897,8 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::End();
                 ImGui::Render();
 
-                // choose box material
-                if (0 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WOOD_CRATE];
-                else if (1 == i_box_mat)
-                    render_ctx->alphatested_ritems.ritems[0].mat = &render_ctx->materials[MAT_WIRED_CRATE];
                 // control mouse activation
-                global_mouse_active = !(beginwnd || sliderf || coloredit || sliderint);
+                global_mouse_active = !(beginwnd || sliderf || coloredit);
             }
 #pragma endregion
             Timer_Tick(&global_timer);
@@ -2895,16 +1907,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 handle_keyboard_input(&global_scene_ctx, &global_timer);
                 update_camera(&global_scene_ctx);
 
-                animate_material(&render_ctx->materials[MAT_WATER], &global_timer);
                 update_obj_cbuffers(render_ctx);
                 update_mat_cbuffers(render_ctx);
                 update_pass_cbuffers(render_ctx, &global_timer);
 
-                if (!stylized_sobel) {
-                    CHECK_AND_FAIL(draw_main(render_ctx, waves, global_blur_filter, blur_count));
-                } else {
-                    CHECK_AND_FAIL(draw_stylized(render_ctx, waves, &global_offscreen_rendertarget, global_blur_filter, blur_count, &global_sobel_filter));
-                }
+                CHECK_AND_FAIL(draw_main(render_ctx));
+
                 CHECK_AND_FAIL(move_to_next_frame(render_ctx, &render_ctx->frame_index, &render_ctx->backbuffer_index));
             } else {
                 Sleep(100);
@@ -2952,19 +1960,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     for (unsigned i = 0; i < _COUNT_SHADERS; ++i)
         render_ctx->shaders[i]->Release();
 
-    render_ctx->root_signature_postprocessing_sobel->Release();
-    render_ctx->root_signature_postprocessing_blur->Release();
-    render_ctx->root_signature_waves->Release();
     render_ctx->root_signature->Release();
-
-    SobelFilter_Deinit(&global_sobel_filter);
-    OffscreenRenderTarget_Deinit(&global_offscreen_rendertarget);
-
-    BlurFilter_Deinit(global_blur_filter);
-    ::free(blur_memory);
-
-    GpuWaves_Deinit(waves);
-    ::free(wave_memory);
 
     // release swapchain backbuffers resources
     for (unsigned i = 0; i < NUM_BACKBUFFERS; ++i)
@@ -3021,3 +2017,4 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
     return 0;
 }
+
