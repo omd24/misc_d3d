@@ -20,7 +20,7 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_DEARIMGUI
+#define ENABLE_DEARIMGUI_
 
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
@@ -43,6 +43,9 @@ enum ALL_RENDERITEMS {
 enum SHADERS_CODE {
     SHADER_DEFAULT_VS = 0,
     SHADER_OPAQUE_PS = 1,
+    SHADER_HS = 1,
+    SHADER_DS = 1,
+
 
     _COUNT_SHADERS
 };
@@ -52,12 +55,12 @@ enum GEOM_INDEX {
     _COUNT_GEOM
 };
 enum MAT_INDEX {
-    MAT_WOOD_CRATE = 0,
+    MAT_WHITE = 0,
 
     _COUNT_MATERIAL
 };
 enum TEX_INDEX {
-    TEX_CRATE01 = 0,
+    TEX_WHITE1X1 = 0,
 
     _COUNT_TEX
 };
@@ -237,14 +240,14 @@ load_texture (
 static void
 create_materials (Material out_materials []) {
 
-    strcpy_s(out_materials[MAT_WOOD_CRATE].name, "wood_crate");
-    out_materials[MAT_WOOD_CRATE].mat_cbuffer_index = 0;
-    out_materials[MAT_WOOD_CRATE].diffuse_srvheap_index = 0;
-    out_materials[MAT_WOOD_CRATE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    out_materials[MAT_WOOD_CRATE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
-    out_materials[MAT_WOOD_CRATE].roughness = 0.2f;
-    out_materials[MAT_WOOD_CRATE].mat_transform = Identity4x4();
-    out_materials[MAT_WOOD_CRATE].n_frames_dirty = NUM_QUEUING_FRAMES;
+    strcpy_s(out_materials[MAT_WHITE].name, "whitemat");
+    out_materials[MAT_WHITE].mat_cbuffer_index = 0;
+    out_materials[MAT_WHITE].diffuse_srvheap_index = 0;
+    out_materials[MAT_WHITE].diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    out_materials[MAT_WHITE].fresnel_r0 = XMFLOAT3(0.05f, 0.05f, 0.05f);
+    out_materials[MAT_WHITE].roughness = 0.2f;
+    out_materials[MAT_WHITE].mat_transform = Identity4x4();
+    out_materials[MAT_WHITE].n_frames_dirty = NUM_QUEUING_FRAMES;
 }
 static float
 calc_hill_height (float x, float z) {
@@ -335,7 +338,7 @@ create_render_items (D3DRenderContext * render_ctx) {
     render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform = Identity4x4();
     render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 0;
     render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_BOX];
-    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WOOD_CRATE];
+    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WHITE];
     render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_BOX].submesh_geoms[0].index_count;
     render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_BOX].submesh_geoms[0].start_index_location;
@@ -402,16 +405,16 @@ create_descriptor_heaps (D3DRenderContext * render_ctx) {
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
 
     // crate texture
-    ID3D12Resource * box_tex = render_ctx->textures[TEX_CRATE01].resource;
+    ID3D12Resource * white1x1_tex = render_ctx->textures[TEX_WHITE1X1].resource;
     memset(&srv_desc, 0, sizeof(srv_desc)); // reset desc
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = box_tex->GetDesc().Format;
+    srv_desc.Format = white1x1_tex->GetDesc().Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MostDetailedMip = 0;
-    srv_desc.Texture2D.MipLevels = box_tex->GetDesc().MipLevels;
+    srv_desc.Texture2D.MipLevels = white1x1_tex->GetDesc().MipLevels;
     srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
     //descriptor_cpu_handle.ptr += render_ctx->cbv_srv_uav_descriptor_size;   // next descriptor
-    render_ctx->device->CreateShaderResourceView(box_tex, &srv_desc, descriptor_cpu_handle);
+    render_ctx->device->CreateShaderResourceView(white1x1_tex, &srv_desc, descriptor_cpu_handle);
 
 
     // Create Render Target View Descriptor Heap
@@ -592,192 +595,6 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
 
     device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(root_signature));
 }
-static void
-create_root_signature_gpuwaves (ID3D12Device * device, ID3D12RootSignature ** wave_root_signature) {
-
-    D3D12_DESCRIPTOR_RANGE uav_table0 = {};
-    uav_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table0.NumDescriptors = 1;
-    uav_table0.BaseShaderRegister = 0;
-    uav_table0.RegisterSpace = 0;
-    uav_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table1 = {};
-    uav_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table1.NumDescriptors = 1;
-    uav_table1.BaseShaderRegister = 1;
-    uav_table1.RegisterSpace = 0;
-    uav_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table2 = {};
-    uav_table2.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table2.NumDescriptors = 1;
-    uav_table2.BaseShaderRegister = 2;
-    uav_table2.RegisterSpace = 0;
-    uav_table2.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
-    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    slot_root_params[0].Constants.Num32BitValues = 6; /* k1, k2, k3, magnitude, [i, j] */
-    slot_root_params[0].Constants.ShaderRegister = 0;
-    slot_root_params[0].Constants.RegisterSpace = 0;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[1].DescriptorTable.pDescriptorRanges = &uav_table0;
-    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table1;
-    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[3].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[3].DescriptorTable.pDescriptorRanges = &uav_table2;
-    slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // A root signature is an array of root parameters.
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = _countof(slot_root_params);
-    root_sig_desc.pParameters = slot_root_params;
-    root_sig_desc.NumStaticSamplers = 0;
-    root_sig_desc.pStaticSamplers = NULL;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ID3DBlob * serialized_root_sig = nullptr;
-    ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
-
-    if (error_blob) {
-        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
-    }
-
-    device->CreateRootSignature(0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(), IID_PPV_ARGS(wave_root_signature));
-}
-static void
-create_root_signature_postprocessing_blur (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
-
-    D3D12_DESCRIPTOR_RANGE srv_table = {};
-    srv_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table.NumDescriptors = 1;
-    srv_table.BaseShaderRegister = 0;
-    srv_table.RegisterSpace = 0;
-    srv_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table = {};
-    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table.NumDescriptors = 1;
-    uav_table.BaseShaderRegister = 0;
-    uav_table.RegisterSpace = 0;
-    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
-    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    slot_root_params[0].Constants.Num32BitValues = 12; /* blur_radius, weights [11] */
-    slot_root_params[0].Constants.ShaderRegister = 0;
-    slot_root_params[0].Constants.RegisterSpace = 0;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table;
-    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
-    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // A root signature is an array of root parameters.
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = _countof(slot_root_params);
-    root_sig_desc.pParameters = slot_root_params;
-    root_sig_desc.NumStaticSamplers = 0;
-    root_sig_desc.pStaticSamplers = NULL;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ID3DBlob * serialized_root_sig = nullptr;
-    ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
-
-    if (error_blob) {
-        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
-    }
-
-    device->CreateRootSignature(
-        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
-        IID_PPV_ARGS(postprocessing_root_signature)
-    );
-}
-static void
-create_root_signature_postprocessing_sobel (ID3D12Device * device, ID3D12RootSignature ** postprocessing_root_signature) {
-
-    D3D12_DESCRIPTOR_RANGE srv_table0 = {};
-    srv_table0.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table0.NumDescriptors = 1;
-    srv_table0.BaseShaderRegister = 0;
-    srv_table0.RegisterSpace = 0;
-    srv_table0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE srv_table1 = {};
-    srv_table1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srv_table1.NumDescriptors = 1;
-    srv_table1.BaseShaderRegister = 1;
-    srv_table1.RegisterSpace = 0;
-    srv_table1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE uav_table = {};
-    uav_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uav_table.NumDescriptors = 1;
-    uav_table.BaseShaderRegister = 0;
-    uav_table.RegisterSpace = 0;
-    uav_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[3] = {};
-    // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
-    slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[0].DescriptorTable.pDescriptorRanges = &srv_table0;
-    slot_root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[1].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[1].DescriptorTable.pDescriptorRanges = &srv_table1;
-    slot_root_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[2].DescriptorTable.pDescriptorRanges = &uav_table;
-    slot_root_params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
-    get_static_samplers(samplers);
-
-    // A root signature is an array of root parameters.
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = _countof(slot_root_params);
-    root_sig_desc.pParameters = slot_root_params;
-    root_sig_desc.NumStaticSamplers = _COUNT_SAMPLER;
-    root_sig_desc.pStaticSamplers = samplers;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-    ID3DBlob * serialized_root_sig = nullptr;
-    ID3DBlob * error_blob = nullptr;
-    D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized_root_sig, &error_blob);
-
-    if (error_blob) {
-        ::OutputDebugStringA((char*)error_blob->GetBufferPointer());
-    }
-
-    device->CreateRootSignature(
-        0, serialized_root_sig->GetBufferPointer(), serialized_root_sig->GetBufferSize(),
-        IID_PPV_ARGS(postprocessing_root_signature)
-    );
-}
 static HRESULT
 compile_shader(wchar_t * path, wchar_t const * entry_point, wchar_t const * shader_model, DxcDefine defines [], int n_defines, IDxcBlob ** out_shader_ptr) {
     // -- using DXC shader compiler [https://asawicki.info/news_1719_two_shader_compilers_of_direct3d_12]
@@ -833,38 +650,6 @@ create_pso (D3DRenderContext * render_ctx) {
     std_input_desc[0].AlignedByteOffset = 0;
     std_input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
 
-    std_input_desc[1] = {};
-    std_input_desc[1].SemanticName = "NORMAL";
-    std_input_desc[1].SemanticIndex = 0;
-    std_input_desc[1].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    std_input_desc[1].InputSlot= 0;
-    std_input_desc[1].AlignedByteOffset = 12;
-    std_input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-
-    std_input_desc[2] = {};
-    std_input_desc[2].SemanticName = "TEXCOORD";
-    std_input_desc[2].SemanticIndex = 0;
-    std_input_desc[2].Format = DXGI_FORMAT_R32G32_FLOAT;
-    std_input_desc[2].InputSlot = 0;
-    std_input_desc[2].AlignedByteOffset = 24;
-    std_input_desc[2].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-
-    D3D12_INPUT_ELEMENT_DESC treesprite_input_desc[2];
-    treesprite_input_desc[0] = {};
-    treesprite_input_desc[0].SemanticName = "POSITION";
-    treesprite_input_desc[0].SemanticIndex = 0;
-    treesprite_input_desc[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
-    treesprite_input_desc[0].InputSlot = 0;
-    treesprite_input_desc[0].AlignedByteOffset = 0;
-    treesprite_input_desc[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-
-    treesprite_input_desc[1] = {};
-    treesprite_input_desc[1].SemanticName = "SIZE";
-    treesprite_input_desc[1].SemanticIndex = 0;
-    treesprite_input_desc[1].Format = DXGI_FORMAT_R32G32_FLOAT;
-    treesprite_input_desc[1].InputSlot = 0;
-    treesprite_input_desc[1].AlignedByteOffset = 12;
-    treesprite_input_desc[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
     //
     // -- Create PSO for Opaque objs
     //
@@ -1655,12 +1440,12 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 // ========================================================================================================
 #pragma region Load Textures
     // crate
-    strcpy_s(render_ctx->textures[TEX_CRATE01].name, "woodcrate01");
-    wcscpy_s(render_ctx->textures[TEX_CRATE01].filename, L"../Textures/WoodCrate02.dds");
+    strcpy_s(render_ctx->textures[TEX_WHITE1X1].name, "white1x1");
+    wcscpy_s(render_ctx->textures[TEX_WHITE1X1].filename, L"../Textures/white1x1.dds");
     load_texture(
         render_ctx->device, render_ctx->direct_cmd_list,
-        render_ctx->textures[TEX_CRATE01].filename,
-        &render_ctx->textures[TEX_CRATE01]
+        render_ctx->textures[TEX_WHITE1X1].filename,
+        &render_ctx->textures[TEX_WHITE1X1]
     );
 #pragma endregion
 
@@ -1763,15 +1548,13 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     // Load and compile shaders
 
 #pragma region Compile Shaders
-    TCHAR shaders_path [] = _T("./shaders/default.hlsl");
+    TCHAR tessellation_shaders_path [] = _T("./shaders/tessellation.hlsl");
 
-    {   // standard shaders
-        compile_shader(shaders_path, _T("VertexShader_Main"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
-
-        int const n_define_fog = 1;
-        DxcDefine defines_fog[n_define_fog] = {};
-        defines_fog[0] = {.Name = _T("FOG"), .Value = _T("1")};
-        compile_shader(shaders_path, _T("PixelShader_Main"), _T("ps_6_0"), defines_fog, n_define_fog, &render_ctx->shaders[SHADER_OPAQUE_PS]);
+    {   // tessellation shaders
+        compile_shader(tessellation_shaders_path, _T("pass_through_vs"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
+        compile_shader(tessellation_shaders_path, _T("pass_through_hs"), _T("hs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_HS]);
+        compile_shader(tessellation_shaders_path, _T("ds"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DS]);
+        compile_shader(tessellation_shaders_path, _T("ps"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_OPAQUE_PS]);
     }
 #pragma endregion Compile Shaders
 
