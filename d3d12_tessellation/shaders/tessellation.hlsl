@@ -121,7 +121,7 @@ pass_through_hs (
 
 [domain("quad")]
 DomainOut
-ds (
+domain_shader (
     PatchTess tess,
     float2 uv : SV_DomainLocation,
     OutputPatch<HullOut, 4> quad
@@ -143,6 +143,6 @@ ds (
 }
 
 float4
-ps (DomainOut pin) : SV_Target {
+pixel_shader (DomainOut pin) : SV_Target {
     return float4(1.0f, 1.0f, 1.0f, 1.0f);
 }

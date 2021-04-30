@@ -36,21 +36,21 @@ enum RENDER_LAYER : int {
     _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_BOX = 0,
+    RITEM_QUAD_PATCH = 0,
 
     _COUNT_RENDERITEM
 };
 enum SHADERS_CODE {
     SHADER_DEFAULT_VS = 0,
     SHADER_OPAQUE_PS = 1,
-    SHADER_HS = 1,
-    SHADER_DS = 1,
+    SHADER_HS = 2,
+    SHADER_DS = 3,
 
 
     _COUNT_SHADERS
 };
 enum GEOM_INDEX {
-    GEOM_BOX = 0,
+    GEOM_QUAD_PATCH = 0,
 
     _COUNT_GEOM
 };
@@ -268,89 +268,66 @@ calc_hill_normal (float x, float z) {
     return n;
 }
 static void
-create_shape_geometry (D3DRenderContext * render_ctx) {
+create_quad_patch_geometry (D3DRenderContext * render_ctx) {
 
-    // required sizes
-    int nvtx = 24;
-    int nidx = 36;
+    DirectX::XMFLOAT3 vertices[4] = {};
+    vertices[0] = XMFLOAT3(-10.0f, 0.0f, +10.0f);
+    vertices[1] = XMFLOAT3(+10.0f, 0.0f, +10.0f);
+    vertices[2] = XMFLOAT3(-10.0f, 0.0f, -10.0f);
+    vertices[3] = XMFLOAT3(+10.0f, 0.0f, -10.0f);
 
-    Vertex *    vertices = (Vertex *)::malloc(sizeof(Vertex) * nvtx);
-    uint16_t *  indices = (uint16_t *)::malloc(sizeof(uint16_t) * nidx);
-    BYTE *      scratch = (BYTE *)::malloc(sizeof(GeomVertex) * nvtx + sizeof(uint16_t) * nidx);
+    uint16_t indices[4] = {0, 1, 2, 3};
 
-    // box
-    UINT bsz = sizeof(GeomVertex) * nvtx;
-    GeomVertex *    box_vertices = reinterpret_cast<GeomVertex *>(scratch);
-    uint16_t *      box_indices = reinterpret_cast<uint16_t *>(scratch + bsz);
+    UINT nvtx = _countof(vertices);
+    UINT nidx = _countof(indices);
 
-    create_box(8.0f, 8.0f, 8.0f, box_vertices, box_indices);
+    SubmeshGeometry quad_submesh = {};
+    quad_submesh.index_count = nidx;
+    quad_submesh.start_index_location = 0;
+    quad_submesh.base_vertex_location = 0;
 
-    SubmeshGeometry box_submesh = {};
-    box_submesh.index_count = nidx;
-    box_submesh.start_index_location = 0;
-    box_submesh.base_vertex_location = 0;
-
-    UINT k = 0;
-    for (size_t i = 0; i < nvtx; ++i, ++k) {
-        vertices[k].position = box_vertices[i].Position;
-        vertices[k].normal = box_vertices[i].Normal;
-        vertices[k].texc = box_vertices[i].TexC;
-    }
-
-    // -- pack indices
-    k = 0;
-    for (size_t i = 0; i < nidx; ++i, ++k) {
-        indices[k] = box_indices[i];
-    }
-
-    UINT vb_byte_size = nvtx * sizeof(Vertex);
+    UINT vb_byte_size = nvtx * sizeof(DirectX::XMFLOAT3);
     UINT ib_byte_size = nidx * sizeof(uint16_t);
 
     // -- Fill out geom
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_cpu);
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].vb_cpu);
     if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_BOX].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_cpu);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].ib_cpu);
     if (indices)
-        CopyMemory(render_ctx->geom[GEOM_BOX].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_BOX].vb_gpu, &render_ctx->geom[GEOM_BOX].vb_uploader);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_BOX].ib_gpu, &render_ctx->geom[GEOM_BOX].ib_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].vb_gpu, &render_ctx->geom[GEOM_QUAD_PATCH].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].ib_gpu, &render_ctx->geom[GEOM_QUAD_PATCH].ib_uploader);
 
-    render_ctx->geom[GEOM_BOX].vb_byte_stide = sizeof(Vertex);
-    render_ctx->geom[GEOM_BOX].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_BOX].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_BOX].index_format = DXGI_FORMAT_R16_UINT;
+    render_ctx->geom[GEOM_QUAD_PATCH].vb_byte_stide = sizeof(DirectX::XMFLOAT3);
+    render_ctx->geom[GEOM_QUAD_PATCH].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH].index_format = DXGI_FORMAT_R16_UINT;
 
-    render_ctx->geom[GEOM_BOX].submesh_names[0] = "box";
-    render_ctx->geom[GEOM_BOX].submesh_geoms[0] = box_submesh;
-
-    // -- cleanup
-    free(scratch);
-    free(indices);
-    free(vertices);
+    render_ctx->geom[GEOM_QUAD_PATCH].submesh_names[0] = "quadpatch";
+    render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0] = quad_submesh;
 }
 static void
 create_render_items (D3DRenderContext * render_ctx) {
-    render_ctx->all_ritems.ritems[RITEM_BOX].world = Identity4x4();
-    DirectX::XMStoreFloat4x4(&render_ctx->all_ritems.ritems[RITEM_BOX].world, XMMatrixTranslation(3.0f, 2.0f, -9.0f));
-    render_ctx->all_ritems.ritems[RITEM_BOX].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_BOX].obj_cbuffer_index = 0;
-    render_ctx->all_ritems.ritems[RITEM_BOX].geometry = &render_ctx->geom[GEOM_BOX];
-    render_ctx->all_ritems.ritems[RITEM_BOX].mat = &render_ctx->materials[MAT_WHITE];
-    render_ctx->all_ritems.ritems[RITEM_BOX].primitive_type = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-    render_ctx->all_ritems.ritems[RITEM_BOX].index_count = render_ctx->geom[GEOM_BOX].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_BOX].start_index_loc = render_ctx->geom[GEOM_BOX].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_BOX].base_vertex_loc = render_ctx->geom[GEOM_BOX].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_BOX].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_BOX].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_BOX].grid_spatial_step = 1;
-    render_ctx->all_ritems.ritems[RITEM_BOX].displacement_map_texel_size = {1.0f, 1.0f};
-    render_ctx->all_ritems.ritems[RITEM_BOX].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].obj_cbuffer_index = 0;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].geometry = &render_ctx->geom[GEOM_QUAD_PATCH];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].mat = &render_ctx->materials[MAT_WHITE];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].primitive_type = D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].index_count = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].start_index_loc = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].base_vertex_loc = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].initialized = true;
     render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[0] = render_ctx->all_ritems.ritems[RITEM_BOX];
-    render_ctx->opaque_ritems.size++;
+    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] =
+        render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH];
 }
 // -- indexed drawing
 static void
@@ -540,14 +517,7 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     tex_table.RegisterSpace = 0;
     tex_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_DESCRIPTOR_RANGE displacement_map_table = {};
-    displacement_map_table.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    displacement_map_table.NumDescriptors = 1;
-    displacement_map_table.BaseShaderRegister = 1;
-    displacement_map_table.RegisterSpace = 0;
-    displacement_map_table.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER slot_root_params[5] = {};
+    D3D12_ROOT_PARAMETER slot_root_params[4] = {};
     // NOTE(omid): Perfomance tip! Order from most frequent to least frequent.
     slot_root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     slot_root_params[0].DescriptorTable.NumDescriptorRanges = 1;
@@ -568,11 +538,6 @@ create_root_signature (ID3D12Device * device, ID3D12RootSignature ** root_signat
     slot_root_params[3].Descriptor.ShaderRegister = 2;
     slot_root_params[3].Descriptor.RegisterSpace = 0;
     slot_root_params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    slot_root_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    slot_root_params[4].DescriptorTable.NumDescriptorRanges = 1;
-    slot_root_params[4].DescriptorTable.pDescriptorRanges = &displacement_map_table;
-    slot_root_params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[_COUNT_SAMPLER] = {};
     get_static_samplers(samplers);
@@ -641,7 +606,7 @@ static void
 create_pso (D3DRenderContext * render_ctx) {
     // -- Create vertex-input-layout Elements
 
-    D3D12_INPUT_ELEMENT_DESC std_input_desc[3];
+    D3D12_INPUT_ELEMENT_DESC std_input_desc[1];
     std_input_desc[0] = {};
     std_input_desc[0].SemanticName = "POSITION";
     std_input_desc[0].SemanticIndex = 0;
@@ -697,14 +662,19 @@ create_pso (D3DRenderContext * render_ctx) {
     opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferSize();
     opaque_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
     opaque_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
+    opaque_pso_desc.HS.pShaderBytecode = render_ctx->shaders[SHADER_HS]->GetBufferPointer();
+    opaque_pso_desc.HS.BytecodeLength = render_ctx->shaders[SHADER_HS]->GetBufferSize();
+    opaque_pso_desc.DS.pShaderBytecode = render_ctx->shaders[SHADER_DS]->GetBufferPointer();
+    opaque_pso_desc.DS.BytecodeLength = render_ctx->shaders[SHADER_DS]->GetBufferSize();
     opaque_pso_desc.BlendState = def_blend_desc;
     opaque_pso_desc.SampleMask = UINT_MAX;
     opaque_pso_desc.RasterizerState = def_rasterizer_desc;
+    opaque_pso_desc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME; // to see patch tessellation output
     opaque_pso_desc.DepthStencilState = ds_desc;
     opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
     opaque_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
     opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
-    opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
     opaque_pso_desc.NumRenderTargets = 1;
     opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
     opaque_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
@@ -1280,7 +1250,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 1280, 720);
+    SceneContext_Init(&global_scene_ctx, 800, 600);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -1303,7 +1273,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     HWND hwnd = CreateWindowEx(
         0,                                              // Optional window styles.
         wc.lpszClassName,                               // Window class
-        _T("Blurring app"),                    // Window title
+        _T("Tessellation app"),                    // Window title
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,               // Window style
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,    // Size and position settings
         0 /* Parent window */, 0 /* Menu */, hInstance  /* Instance handle */,
@@ -1553,15 +1523,15 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
     {   // tessellation shaders
         compile_shader(tessellation_shaders_path, _T("pass_through_vs"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
         compile_shader(tessellation_shaders_path, _T("pass_through_hs"), _T("hs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_HS]);
-        compile_shader(tessellation_shaders_path, _T("ds"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DS]);
-        compile_shader(tessellation_shaders_path, _T("ps"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_OPAQUE_PS]);
+        compile_shader(tessellation_shaders_path, _T("domain_shader"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DS]);
+        compile_shader(tessellation_shaders_path, _T("pixel_shader"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_OPAQUE_PS]);
     }
 #pragma endregion Compile Shaders
 
     create_pso(render_ctx);
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_shape_geometry(render_ctx);
+    create_quad_patch_geometry(render_ctx);
     create_materials(render_ctx->materials);
     create_render_items(render_ctx);
 
