@@ -20,8 +20,7 @@
 #define ENABLE_DEBUG_LAYER 0
 #endif
 
-#define ENABLE_DEARIMGUI_
-
+#define ENABLE_DEARIMGUI
 
 #pragma warning (disable: 28182)    // pointer can be NULL.
 #pragma warning (disable: 6011)     // dereferencing a potentially null pointer
@@ -31,26 +30,30 @@
 #define NUM_QUEUING_FRAMES      3
 
 enum RENDER_LAYER : int {
-    LAYER_OPAQUE = 0,
+    LAYER_BASIC_TESS = 0,
+    LAYER_BEZIER_TESS = 1,
 
     _COUNT_RENDERCOMPUTE_LAYER
 };
 enum ALL_RENDERITEMS {
-    RITEM_QUAD_PATCH = 0,
+    RITEM_QUAD_PATCH_4CP = 0,
+    RITEM_QUAD_PATCH_16CP = 1,
 
     _COUNT_RENDERITEM
 };
 enum SHADERS_CODE {
     SHADER_DEFAULT_VS = 0,
     SHADER_OPAQUE_PS = 1,
-    SHADER_HS = 2,
-    SHADER_DS = 3,
-
+    SHADER_4CP_HS = 2,
+    SHADER_16CP_HS = 3,
+    SHADER_BASIC_DS = 4,
+    SHADER_BEZIER_DS = 5,
 
     _COUNT_SHADERS
 };
 enum GEOM_INDEX {
-    GEOM_QUAD_PATCH = 0,
+    GEOM_QUAD_PATCH_4CP = 0,
+    GEOM_QUAD_PATCH_16CP = 1,
 
     _COUNT_GEOM
 };
@@ -98,10 +101,10 @@ struct SceneContext {
     float aspect_ratio;
 };
 
+int global_tess_switch = 2;
 GameTimer global_timer;
 bool global_paused;
 bool global_resizing;
-bool global_mouse_active;
 SceneContext global_scene_ctx;
 
 #if defined(ENABLE_DEARIMGUI)
@@ -153,7 +156,8 @@ struct D3DRenderContext {
     // List of all the render items.
     RenderItemArray                 all_ritems;
     // Render items divided by PSO.
-    RenderItemArray                 opaque_ritems;
+    RenderItemArray                 basictess_ritems;
+    RenderItemArray                 beziersurf_ritems;
 
     MeshGeometry                    geom[_COUNT_GEOM];
 
@@ -267,8 +271,11 @@ calc_hill_normal (float x, float z) {
 
     return n;
 }
+/*
+ 4_CONTROL_POINT_PATCHLIST
+*/
 static void
-create_quad_patch_geometry (D3DRenderContext * render_ctx) {
+create_quad_patch_geometry_4cp (D3DRenderContext * render_ctx) {
 
     DirectX::XMFLOAT3 vertices[4] = {};
     vertices[0] = XMFLOAT3(-10.0f, 0.0f, +10.0f);
@@ -290,44 +297,131 @@ create_quad_patch_geometry (D3DRenderContext * render_ctx) {
     UINT ib_byte_size = nidx * sizeof(uint16_t);
 
     // -- Fill out geom
-    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].vb_cpu);
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_cpu);
     if (vertices)
-        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
 
-    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].ib_cpu);
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].ib_cpu);
     if (indices)
-        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH_4CP].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
 
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].vb_gpu, &render_ctx->geom[GEOM_QUAD_PATCH].vb_uploader);
-    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH].ib_gpu, &render_ctx->geom[GEOM_QUAD_PATCH].ib_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_gpu, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].ib_gpu, &render_ctx->geom[GEOM_QUAD_PATCH_4CP].ib_uploader);
 
-    render_ctx->geom[GEOM_QUAD_PATCH].vb_byte_stide = sizeof(DirectX::XMFLOAT3);
-    render_ctx->geom[GEOM_QUAD_PATCH].vb_byte_size = vb_byte_size;
-    render_ctx->geom[GEOM_QUAD_PATCH].ib_byte_size = ib_byte_size;
-    render_ctx->geom[GEOM_QUAD_PATCH].index_format = DXGI_FORMAT_R16_UINT;
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_byte_stide = sizeof(DirectX::XMFLOAT3);
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].index_format = DXGI_FORMAT_R16_UINT;
 
-    render_ctx->geom[GEOM_QUAD_PATCH].submesh_names[0] = "quadpatch";
-    render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0] = quad_submesh;
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].submesh_names[0] = "quadpatch4cp";
+    render_ctx->geom[GEOM_QUAD_PATCH_4CP].submesh_geoms[0] = quad_submesh;
+}
+/*
+ 16_CONTROL_POINT_PATCHLIST
+*/
+static void
+create_quad_patch_geometry_16cp (D3DRenderContext * render_ctx) {
+
+    DirectX::XMFLOAT3 vertices[16] = {};
+    // Row 0
+    vertices[0] = XMFLOAT3(-10.0f, -10.0f, +15.0f);
+    vertices[1] = XMFLOAT3(-5.0f, 0.0f, +15.0f);
+    vertices[2] = XMFLOAT3(+5.0f, 0.0f, +15.0f);
+    vertices[3] = XMFLOAT3(+10.0f, 0.0f, +15.0f);
+
+    // Row 1
+    vertices[4] = XMFLOAT3(-15.0f, 0.0f, +5.0f);
+    vertices[5] = XMFLOAT3(-5.0f, 0.0f, +5.0f);
+    vertices[6] = XMFLOAT3(+5.0f, 20.0f, +5.0f);
+    vertices[7] = XMFLOAT3(+15.0f, 0.0f, +5.0f);
+
+    // Row 2
+    vertices[8] = XMFLOAT3(-15.0f, 0.0f, -5.0f);
+    vertices[9] = XMFLOAT3(-5.0f, 0.0f, -5.0f);
+    vertices[10] = XMFLOAT3(+5.0f, 0.0f, -5.0f);
+    vertices[11] = XMFLOAT3(+15.0f, 0.0f, -5.0f);
+
+    // Row 3
+    vertices[12] = XMFLOAT3(-10.0f, 10.0f, -15.0f);
+    vertices[13] = XMFLOAT3(-5.0f, 0.0f, -15.0f);
+    vertices[14] = XMFLOAT3(+5.0f, 0.0f, -15.0f);
+    vertices[15] = XMFLOAT3(+25.0f, 10.0f, -15.0f);
+
+    uint16_t indices[16] = {
+         0,  1,  2,  3,
+         4,  5,  6,  7,
+         8,  9, 10, 11,
+        12, 13, 14, 15
+    };
+
+    UINT nvtx = _countof(vertices);
+    UINT nidx = _countof(indices);
+
+    SubmeshGeometry quad_submesh = {};
+    quad_submesh.index_count = nidx;
+    quad_submesh.start_index_location = 0;
+    quad_submesh.base_vertex_location = 0;
+
+    UINT vb_byte_size = nvtx * sizeof(DirectX::XMFLOAT3);
+    UINT ib_byte_size = nidx * sizeof(uint16_t);
+
+    // -- Fill out geom
+    D3DCreateBlob(vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_cpu);
+    if (vertices)
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_cpu->GetBufferPointer(), vertices, vb_byte_size);
+
+    D3DCreateBlob(ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].ib_cpu);
+    if (indices)
+        CopyMemory(render_ctx->geom[GEOM_QUAD_PATCH_16CP].ib_cpu->GetBufferPointer(), indices, ib_byte_size);
+
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, vertices, vb_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_gpu, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_uploader);
+    create_default_buffer(render_ctx->device, render_ctx->direct_cmd_list, indices, ib_byte_size, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].ib_gpu, &render_ctx->geom[GEOM_QUAD_PATCH_16CP].ib_uploader);
+
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_byte_stide = sizeof(DirectX::XMFLOAT3);
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].vb_byte_size = vb_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].ib_byte_size = ib_byte_size;
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].index_format = DXGI_FORMAT_R16_UINT;
+
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].submesh_names[0] = "quadpatch16cp";
+    render_ctx->geom[GEOM_QUAD_PATCH_16CP].submesh_geoms[0] = quad_submesh;
 }
 static void
 create_render_items (D3DRenderContext * render_ctx) {
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].world = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].tex_transform = Identity4x4();
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].obj_cbuffer_index = 0;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].geometry = &render_ctx->geom[GEOM_QUAD_PATCH];
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].mat = &render_ctx->materials[MAT_WHITE];
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].primitive_type = D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].index_count = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].index_count;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].start_index_loc = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].start_index_location;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].base_vertex_loc = render_ctx->geom[GEOM_QUAD_PATCH].submesh_geoms[0].base_vertex_location;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].grid_spatial_step = 1;
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].displacement_map_texel_size = {1.0f, 1.0f};
-    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH].initialized = true;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].obj_cbuffer_index = 0;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].geometry = &render_ctx->geom[GEOM_QUAD_PATCH_4CP];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].mat = &render_ctx->materials[MAT_WHITE];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].primitive_type = D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].index_count = render_ctx->geom[GEOM_QUAD_PATCH_4CP].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].start_index_loc = render_ctx->geom[GEOM_QUAD_PATCH_4CP].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].base_vertex_loc = render_ctx->geom[GEOM_QUAD_PATCH_4CP].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP].initialized = true;
     render_ctx->all_ritems.size++;
-    render_ctx->opaque_ritems.ritems[render_ctx->opaque_ritems.size++] =
-        render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH];
+    render_ctx->basictess_ritems.ritems[render_ctx->basictess_ritems.size++] =
+        render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_4CP];
+
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].world = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].tex_transform = Identity4x4();
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].obj_cbuffer_index = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].geometry = &render_ctx->geom[GEOM_QUAD_PATCH_16CP];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].mat = &render_ctx->materials[MAT_WHITE];
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].primitive_type = D3D_PRIMITIVE_TOPOLOGY_16_CONTROL_POINT_PATCHLIST;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].index_count = render_ctx->geom[GEOM_QUAD_PATCH_16CP].submesh_geoms[0].index_count;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].start_index_loc = render_ctx->geom[GEOM_QUAD_PATCH_16CP].submesh_geoms[0].start_index_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].base_vertex_loc = render_ctx->geom[GEOM_QUAD_PATCH_16CP].submesh_geoms[0].base_vertex_location;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].mat->n_frames_dirty = NUM_QUEUING_FRAMES;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].grid_spatial_step = 1;
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].displacement_map_texel_size = {1.0f, 1.0f};
+    render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP].initialized = true;
+    render_ctx->all_ritems.size++;
+    render_ctx->beziersurf_ritems.ritems[render_ctx->beziersurf_ritems.size++] =
+        render_ctx->all_ritems.ritems[RITEM_QUAD_PATCH_16CP];
 }
 // -- indexed drawing
 static void
@@ -656,63 +750,67 @@ create_pso (D3DRenderContext * render_ctx) {
     ds_desc.FrontFace = def_stencil_op;
     ds_desc.BackFace = def_stencil_op;
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque_pso_desc = {};
-    opaque_pso_desc.pRootSignature = render_ctx->root_signature;
-    opaque_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferPointer();
-    opaque_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferSize();
-    opaque_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
-    opaque_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
-    opaque_pso_desc.HS.pShaderBytecode = render_ctx->shaders[SHADER_HS]->GetBufferPointer();
-    opaque_pso_desc.HS.BytecodeLength = render_ctx->shaders[SHADER_HS]->GetBufferSize();
-    opaque_pso_desc.DS.pShaderBytecode = render_ctx->shaders[SHADER_DS]->GetBufferPointer();
-    opaque_pso_desc.DS.BytecodeLength = render_ctx->shaders[SHADER_DS]->GetBufferSize();
-    opaque_pso_desc.BlendState = def_blend_desc;
-    opaque_pso_desc.SampleMask = UINT_MAX;
-    opaque_pso_desc.RasterizerState = def_rasterizer_desc;
-    opaque_pso_desc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME; // to see patch tessellation output
-    opaque_pso_desc.DepthStencilState = ds_desc;
-    opaque_pso_desc.DSVFormat = render_ctx->depthstencil_format;
-    opaque_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
-    opaque_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
-    opaque_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
-    opaque_pso_desc.NumRenderTargets = 1;
-    opaque_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
-    opaque_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
-    opaque_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
+    // -- pso for basic tessellation of a quad patch with 4 control points
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC basic_pso_desc = {};
+    basic_pso_desc.pRootSignature = render_ctx->root_signature;
+    basic_pso_desc.VS.pShaderBytecode = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferPointer();
+    basic_pso_desc.VS.BytecodeLength = render_ctx->shaders[SHADER_DEFAULT_VS]->GetBufferSize();
+    basic_pso_desc.PS.pShaderBytecode = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferPointer();
+    basic_pso_desc.PS.BytecodeLength = render_ctx->shaders[SHADER_OPAQUE_PS]->GetBufferSize();
+    basic_pso_desc.HS.pShaderBytecode = render_ctx->shaders[SHADER_4CP_HS]->GetBufferPointer();
+    basic_pso_desc.HS.BytecodeLength = render_ctx->shaders[SHADER_4CP_HS]->GetBufferSize();
+    basic_pso_desc.DS.pShaderBytecode = render_ctx->shaders[SHADER_BASIC_DS]->GetBufferPointer();
+    basic_pso_desc.DS.BytecodeLength = render_ctx->shaders[SHADER_BASIC_DS]->GetBufferSize();
+    basic_pso_desc.BlendState = def_blend_desc;
+    basic_pso_desc.SampleMask = UINT_MAX;
+    basic_pso_desc.RasterizerState = def_rasterizer_desc;
+    basic_pso_desc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME; // to see patch tessellation output
+    basic_pso_desc.DepthStencilState = ds_desc;
+    basic_pso_desc.DSVFormat = render_ctx->depthstencil_format;
+    basic_pso_desc.InputLayout.pInputElementDescs = std_input_desc;
+    basic_pso_desc.InputLayout.NumElements = ARRAY_COUNT(std_input_desc);
+    basic_pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    basic_pso_desc.NumRenderTargets = 1;
+    basic_pso_desc.RTVFormats[0] = render_ctx->backbuffer_format;
+    basic_pso_desc.SampleDesc.Count = render_ctx->msaa4x_state ? 4 : 1;
+    basic_pso_desc.SampleDesc.Quality = render_ctx->msaa4x_state ? (render_ctx->msaa4x_quality - 1) : 0;
 
-    render_ctx->device->CreateGraphicsPipelineState(&opaque_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_OPAQUE]));
+    render_ctx->device->CreateGraphicsPipelineState(&basic_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_BASIC_TESS]));
 
-}
-static void
-handle_keyboard_input (SceneContext * scene_ctx, GameTimer * gt) {
-
+    // -- pso for bezier tessellation (cubic bezier surface with 16 control points)
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC bezier_pso_desc = basic_pso_desc;
+    bezier_pso_desc.HS.pShaderBytecode = render_ctx->shaders[SHADER_16CP_HS]->GetBufferPointer();
+    bezier_pso_desc.HS.BytecodeLength = render_ctx->shaders[SHADER_16CP_HS]->GetBufferSize();
+    bezier_pso_desc.DS.pShaderBytecode = render_ctx->shaders[SHADER_BEZIER_DS]->GetBufferPointer();
+    bezier_pso_desc.DS.BytecodeLength = render_ctx->shaders[SHADER_BEZIER_DS]->GetBufferSize();
+    render_ctx->device->CreateGraphicsPipelineState(&bezier_pso_desc, IID_PPV_ARGS(&render_ctx->psos[LAYER_BEZIER_TESS]));
 }
 static void
 handle_mouse_move (SceneContext * scene_ctx, WPARAM wParam, int x, int y) {
-    if (global_mouse_active) {
-        if ((wParam & MK_LBUTTON) != 0) {
-            // make each pixel correspond to a quarter of a degree
-            float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
-            float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-            // update angles (to orbit camera around)
-            scene_ctx->theta += dx;
-            scene_ctx->phi += dy;
+    if ((wParam & MK_LBUTTON) != 0) {
+        // make each pixel correspond to a quarter of a degree
+        float dx = DirectX::XMConvertToRadians(0.25f * (float)(x - scene_ctx->mouse.x));
+        float dy = DirectX::XMConvertToRadians(0.25f * (float)(y - scene_ctx->mouse.y));
 
-            // clamp phi
-            scene_ctx->phi = CLAMP_VALUE(scene_ctx->phi, 0.1f, XM_PI - 0.1f);
-        } else if ((wParam & MK_RBUTTON) != 0) {
-            // make each pixel correspond to a 0.2 unit in scene
-            float dx = 0.2f * (float)(x - scene_ctx->mouse.x);
-            float dy = 0.2f * (float)(y - scene_ctx->mouse.y);
+        // update angles (to orbit camera around)
+        scene_ctx->theta += dx;
+        scene_ctx->phi += dy;
 
-            // update camera radius
-            scene_ctx->radius += dx - dy;
+        // clamp phi
+        scene_ctx->phi = CLAMP_VALUE(scene_ctx->phi, 0.1f, XM_PI - 0.1f);
+    } else if ((wParam & MK_RBUTTON) != 0) {
+        // make each pixel correspond to a 0.2 unit in scene
+        float dx = 0.2f * (float)(x - scene_ctx->mouse.x);
+        float dy = 0.2f * (float)(y - scene_ctx->mouse.y);
 
-            // clamp radius
-            scene_ctx->radius = CLAMP_VALUE(scene_ctx->radius, 5.0f, 150.0f);
-        }
+        // update camera radius
+        scene_ctx->radius += dx - dy;
+
+        // clamp radius
+        scene_ctx->radius = CLAMP_VALUE(scene_ctx->radius, 5.0f, 150.0f);
     }
+
     scene_ctx->mouse.x = x;
     scene_ctx->mouse.y = y;
 }
@@ -877,18 +975,6 @@ flush_command_queue (D3DRenderContext * render_ctx) {
         }
     }
 }
-static void
-draw_fullscreen_quad (ID3D12GraphicsCommandList * cmdlist, RenderItem * dummy_ritem) {
-    // using dummy buffer to suppress EXECUTION WARNING #202: COMMAND_LIST_DRAW_VERTEX_BUFFER_NOT_SET
-    D3D12_VERTEX_BUFFER_VIEW vbv = Mesh_GetVertexBufferView(dummy_ritem->geometry);
-
-    // -- null out IA stage since we build the vertex off the SV_VertexID in the shader
-    cmdlist->IASetVertexBuffers(0, 1, &vbv);
-    cmdlist->IASetIndexBuffer(nullptr);
-    cmdlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-    cmdlist->DrawInstanced(6, 1, 0, 0);
-}
 static HRESULT
 draw_main (D3DRenderContext * render_ctx) {
     HRESULT ret = E_FAIL;
@@ -905,12 +991,10 @@ draw_main (D3DRenderContext * render_ctx) {
     // When ExecuteCommandList() is called on a particular command 
     // list, that command list can then be reset at any time and must be before 
     // re-recording.
-    ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_OPAQUE]);
+    ret = cmdlist->Reset(render_ctx->frame_resources[frame_index].cmd_list_alloc, render_ctx->psos[LAYER_BASIC_TESS]);
 
     ID3D12DescriptorHeap * descriptor_heaps [] = {render_ctx->srv_heap};
     cmdlist->SetDescriptorHeaps(_countof(descriptor_heaps), descriptor_heaps);
-
-    cmdlist->SetPipelineState(render_ctx->psos[LAYER_OPAQUE]);
 
     // -- set viewport and scissor
     cmdlist->RSSetViewports(1, &render_ctx->viewport);
@@ -939,15 +1023,31 @@ draw_main (D3DRenderContext * render_ctx) {
     ID3D12Resource * pass_cb = render_ctx->frame_resources[frame_index].pass_cb;
     cmdlist->SetGraphicsRootConstantBufferView(2, pass_cb->GetGPUVirtualAddress());
 
-    // 1. draw opaque objs first (opaque pso is currently used)
-    draw_render_items(
-        cmdlist,
-        render_ctx->frame_resources[frame_index].obj_cb,
-        render_ctx->frame_resources[frame_index].mat_cb,
-        render_ctx->cbv_srv_uav_descriptor_size,
-        render_ctx->srv_heap,
-        &render_ctx->opaque_ritems, frame_index
-    );
+    // 1. basic tessellation
+    if (1 == global_tess_switch) {
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_BASIC_TESS]);
+        draw_render_items(
+            cmdlist,
+            render_ctx->frame_resources[frame_index].obj_cb,
+            render_ctx->frame_resources[frame_index].mat_cb,
+            render_ctx->cbv_srv_uav_descriptor_size,
+            render_ctx->srv_heap,
+            &render_ctx->basictess_ritems, frame_index
+        );
+    }
+    // 2. bezier surface
+    if (2 == global_tess_switch) {
+        cmdlist->SetPipelineState(render_ctx->psos[LAYER_BEZIER_TESS]);
+        draw_render_items(
+            cmdlist,
+            render_ctx->frame_resources[frame_index].obj_cb,
+            render_ctx->frame_resources[frame_index].mat_cb,
+            render_ctx->cbv_srv_uav_descriptor_size,
+            render_ctx->srv_heap,
+            &render_ctx->beziersurf_ritems, frame_index
+        );
+    }
+
     if (global_imgui_enabled)
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmdlist);
 
@@ -971,8 +1071,8 @@ SceneContext_Init (SceneContext * scene_ctx, int w, int h) {
 
     scene_ctx->width = w;
     scene_ctx->height = h;
-    scene_ctx->theta = 1.5f * XM_PI;
-    scene_ctx->phi = XM_PIDIV2 - 0.1f;
+    scene_ctx->theta = 0.8f * XM_PI;
+    scene_ctx->phi = 0.4f * XM_PI;
     scene_ctx->radius = 50.0f;
     scene_ctx->sun_theta = 1.25f * XM_PI;
     scene_ctx->sun_phi = XM_PIDIV4;
@@ -1141,14 +1241,6 @@ d3d_resize (D3DRenderContext * render_ctx) {
         XMStoreFloat4x4(&global_scene_ctx.proj, p);
     }
 }
-static void
-check_active_item () {
-    if (ImGui::IsItemActive() || ImGui::IsItemHovered())
-        global_mouse_active = false;
-    else
-        global_mouse_active = true;
-}
-
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -1250,7 +1342,7 @@ main_win_cb (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 INT WINAPI
 WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
-    SceneContext_Init(&global_scene_ctx, 800, 600);
+    SceneContext_Init(&global_scene_ctx, 1280, 720);
     D3DRenderContext * render_ctx = (D3DRenderContext *)::malloc(sizeof(D3DRenderContext));
     RenderContext_Init(render_ctx);
 
@@ -1365,7 +1457,7 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         render_ctx->device->CreateCommandList(
             0, D3D12_COMMAND_LIST_TYPE_DIRECT,
             render_ctx->direct_cmd_list_alloc,
-            render_ctx->psos[LAYER_OPAQUE], IID_PPV_ARGS(&render_ctx->direct_cmd_list)
+            render_ctx->psos[LAYER_BASIC_TESS], IID_PPV_ARGS(&render_ctx->direct_cmd_list)
         );
 
         // Reset the command list to prep for initialization commands.
@@ -1519,19 +1611,26 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 
 #pragma region Compile Shaders
     TCHAR tessellation_shaders_path [] = _T("./shaders/tessellation.hlsl");
+    TCHAR bezier_shaders_path [] = _T("./shaders/bezier_tessellation.hlsl");
 
-    {   // tessellation shaders
+    {   // basic tessellation shaders
         compile_shader(tessellation_shaders_path, _T("pass_through_vs"), _T("vs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DEFAULT_VS]);
-        compile_shader(tessellation_shaders_path, _T("pass_through_hs"), _T("hs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_HS]);
-        compile_shader(tessellation_shaders_path, _T("domain_shader"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_DS]);
+        compile_shader(tessellation_shaders_path, _T("pass_through_hs_4cp"), _T("hs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_4CP_HS]);
+        compile_shader(tessellation_shaders_path, _T("basic_ds"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_BASIC_DS]);
         compile_shader(tessellation_shaders_path, _T("pixel_shader"), _T("ps_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_OPAQUE_PS]);
     }
+    {   // bezier shaders
+        compile_shader(bezier_shaders_path, _T("pass_through_hs_16cp"), _T("hs_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_16CP_HS]);
+        compile_shader(bezier_shaders_path, _T("bezier_ds"), _T("ds_6_0"), nullptr, 0, &render_ctx->shaders[SHADER_BEZIER_DS]);
+    }
+
 #pragma endregion Compile Shaders
 
     create_pso(render_ctx);
 
 #pragma region Shapes_And_Renderitem_Creation
-    create_quad_patch_geometry(render_ctx);
+    create_quad_patch_geometry_4cp(render_ctx);     // basic tessellation
+    create_quad_patch_geometry_16cp(render_ctx);    // cubic bezier surface
     create_materials(render_ctx->materials);
     create_render_items(render_ctx);
 
@@ -1570,7 +1669,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Imgui Setup
     bool * ptr_open = nullptr;
     ImGuiWindowFlags window_flags = 0;
-    bool beginwnd, sliderf, coloredit;
     if (global_imgui_enabled) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1601,11 +1699,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
         // Setup imgui window flags
         window_flags |= ImGuiWindowFlags_NoScrollbar;
         window_flags |= ImGuiWindowFlags_MenuBar;
-        //window_flags |= ImGuiWindowFlags_NoMove;
+        window_flags |= ImGuiWindowFlags_NoMove;
         window_flags |= ImGuiWindowFlags_NoCollapse;
         window_flags |= ImGuiWindowFlags_NoNav;
         window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus;
-        //window_flags |= ImGuiWindowFlags_NoResize;
+        window_flags |= ImGuiWindowFlags_NoResize;
 
     }
 #pragma endregion
@@ -1614,7 +1712,6 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
 #pragma region Main_Loop
     global_paused = false;
     global_resizing = false;
-    global_mouse_active = true;
     Timer_Init(&global_timer);
     Timer_Reset(&global_timer);
 
@@ -1630,18 +1727,17 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui_ImplWin32_NewFrame();
                 ImGui::NewFrame();
                 ImGui::Begin("Settings", ptr_open, window_flags);
-                beginwnd = ImGui::IsItemActive();
 
-                ImGui::SliderFloat(
-                    "Fog Distance",
-                    &render_ctx->main_pass_constants.fog_start,
-                    5.0f,
-                    150.0f
+                ImGui::RadioButton("Basic Tessellation", &global_tess_switch, 1);
+                ImGui::Text(
+                    "Tessellating a quad patch with 4 control points\n"
+                    "based on distance from camera."
                 );
-                sliderf = ImGui::IsItemActive();
-
-                ImGui::ColorEdit3("Fog Color", (float*)&render_ctx->main_pass_constants.fog_color);
-                coloredit = ImGui::IsItemActive();
+                ImGui::RadioButton("Bezier Surface", &global_tess_switch, 2);
+                ImGui::Text(
+                    "A Bezier surface using cubic Bernstein bases,\n"
+                    "with a 16 CPs quad patch and uniform tessellations."
+                );
 
                 ImGui::Text("\n\n");
                 ImGui::Separator();
@@ -1650,14 +1746,11 @@ WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ INT) {
                 ImGui::End();
                 ImGui::Render();
 
-                // control mouse activation
-                global_mouse_active = !(beginwnd || sliderf || coloredit);
             }
 #pragma endregion
             Timer_Tick(&global_timer);
 
             if (!global_paused) {
-                handle_keyboard_input(&global_scene_ctx, &global_timer);
                 update_camera(&global_scene_ctx);
 
                 update_obj_cbuffers(render_ctx);

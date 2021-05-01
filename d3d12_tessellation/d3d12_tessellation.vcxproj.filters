@@ -67,5 +67,8 @@
     <FxCompile Include="shaders\tessellation.hlsl">
       <Filter>Resource Files</Filter>
     </FxCompile>
+    <FxCompile Include="shaders\bezier_tessellation.hlsl">
+      <Filter>Resource Files</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>
